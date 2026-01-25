@@ -1,14 +1,19 @@
 import os
-import json
 import time
+import json
+import random
+import traceback
+from dataclasses import dataclass
 from pathlib import Path
 from datetime import datetime
+from typing import Any, Callable, Dict, Optional, List, Tuple
+
+import pandas as pd
+import tushare as ts
 from dateutil import tz
 
-import tushare as ts
-import pandas as pd
-
 BJ_TZ = tz.gettz("Asia/Shanghai")
+
 
 # =========================
 # 基础工具
@@ -16,61 +21,225 @@ BJ_TZ = tz.gettz("Asia/Shanghai")
 def bj_now() -> datetime:
     return datetime.now(BJ_TZ)
 
+
 def bj_today_yyyymmdd() -> str:
     return bj_now().strftime("%Y%m%d")
 
-def ensure_dir(p: Path):
+
+def ensure_dir(p: Path) -> None:
     p.mkdir(parents=True, exist_ok=True)
 
-def save_df(df: pd.DataFrame, out_csv: Path):
+
+def safe_json_dump(obj: Any, path: Path) -> None:
+    path.write_text(json.dumps(obj, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def save_df(df: pd.DataFrame, out_csv: Path) -> None:
+    # df 可能为空：也要能正常落地，避免 workflow 失败
+    ensure_dir(out_csv.parent)
     df.to_csv(out_csv, index=False, encoding="utf-8-sig")
 
-def save_json(obj: dict, out_json: Path):
-    out_json.write_text(json.dumps(obj, ensure_ascii=False, indent=2), encoding="utf-8")
 
-def get_pro():
-    token = os.getenv("TUSHARE_TOKEN", "").strip()
-    if not token:
-        raise RuntimeError("Missing env TUSHARE_TOKEN. Set it in GitHub Secrets or local env.")
-    ts.set_token(token)
-    return ts.pro_api()
-
-def fn_name(fn) -> str:
+def fn_display_name(fn: Callable) -> str:
     """
-    兼容 functools.partial / pro.xxx 等对象，避免访问 __name__ 报错
+    兼容：普通函数 / tushare 的接口方法 / functools.partial
     """
     name = getattr(fn, "__name__", None)
     if name:
         return name
-    # partial / bound method / callable object
-    return getattr(getattr(fn, "func", None), "__name__", None) or repr(fn)
+    # partial
+    func = getattr(fn, "func", None)
+    if func is not None:
+        return getattr(func, "__name__", func.__class__.__name__)
+    return fn.__class__.__name__
 
-def call_with_retry(fn, *, max_retry=10, sleep_sec=8, **kwargs) -> pd.DataFrame:
-    last_err = None
-    name = fn_name(fn)
 
-    for i in range(1, max_retry + 1):
+def get_pro():
+    token = os.getenv("TUSHARE_TOKEN", "").strip()
+    if not token:
+        raise RuntimeError("缺少环境变量 TUSHARE_TOKEN（请在 GitHub Secrets 里配置）")
+    ts.set_token(token)
+    return ts.pro_api()
+
+
+# =========================
+# 交易日处理
+# =========================
+def resolve_trade_date(pro, requested_trade_date: str) -> str:
+    """
+    - 如果指定了 TRADE_DATE：优先用它；但若它不是交易日，则回退最近交易日
+    - 如果未指定：默认用北京时间今天；若今天非交易日则回退最近交易日
+    """
+    target = requested_trade_date.strip() if requested_trade_date else bj_today_yyyymmdd()
+
+    # 为了“最近交易日”回退，需要向前多取一些天
+    end_date = target
+    start_date = (datetime.strptime(target, "%Y%m%d") - pd.Timedelta(days=30)).strftime("%Y%m%d")
+
+    cal = pro.trade_cal(exchange="SSE", start_date=start_date, end_date=end_date)
+    if cal is None or cal.empty:
+        # 极端情况：拿不到日历就原样返回
+        return target
+
+    cal = cal.sort_values("cal_date")
+    # target 当天是否开市
+    row = cal[cal["cal_date"] == target]
+    if not row.empty and int(row.iloc[0]["is_open"]) == 1:
+        return target
+
+    # 回退到 <= target 的最近开市日
+    opened = cal[cal["is_open"] == 1]
+    opened = opened[opened["cal_date"] <= target]
+    if opened.empty:
+        return target
+    return str(opened.iloc[-1]["cal_date"])
+
+
+# =========================
+# 重试封装
+# =========================
+@dataclass
+class RetryConfig:
+    max_retry: int = 10
+    base_sleep_sec: float = 2.0
+    max_sleep_sec: float = 20.0
+    jitter_sec: float = 0.6
+
+
+def call_with_retry(
+    fn: Callable,
+    *,
+    retry: RetryConfig,
+    allow_empty: bool,
+    empty_ok_after_retry: bool = True,
+    **kwargs,
+) -> pd.DataFrame:
+    """
+    allow_empty:
+      - True  : 接口返回空 df 也算成功（直接返回空 df）
+      - False : 空 df 视为“失败”，走重试；重试后仍空，看 empty_ok_after_retry 决定是否抛错
+    empty_ok_after_retry:
+      - True  : 重试耗尽仍为空 -> 返回空 df（不抛错，避免 workflow 失败）
+      - False : 重试耗尽仍为空 -> 抛错（强制失败）
+    """
+    last_err: Optional[Exception] = None
+    name = fn_display_name(fn)
+
+    for i in range(1, retry.max_retry + 1):
         try:
             df = fn(**kwargs)
-            if df is None or df.empty:
-                raise RuntimeError(f"Empty dataframe for {name} kwargs={kwargs}")
+
+            if df is None:
+                df = pd.DataFrame()
+
+            if df.empty:
+                if allow_empty:
+                    print(f"[OK-EMPTY] {name} kwargs={kwargs} -> empty dataframe (allowed)")
+                    return df
+
+                # 不允许空：触发重试
+                raise RuntimeError(f"empty dataframe (not allowed): {name} kwargs={kwargs}")
+
+            print(f"[OK] {name} kwargs={kwargs} -> rows={len(df)}")
             return df
+
         except Exception as e:
             last_err = e
-            # 最后一次就不 sleep 了
-            if i < max_retry:
-                time.sleep(sleep_sec)
 
-    raise RuntimeError(f"Failed after {max_retry} retries: {last_err}")
+            # 指数退避 + 抖动
+            sleep = min(retry.max_sleep_sec, retry.base_sleep_sec * (2 ** (i - 1)))
+            sleep = sleep + random.random() * retry.jitter_sec
+            print(f"[RETRY {i}/{retry.max_retry}] {name} kwargs={kwargs} err={repr(e)} sleep={sleep:.1f}s")
+            time.sleep(sleep)
+
+    # 重试耗尽
+    msg = f"Failed after {retry.max_retry} retries: {name} kwargs={kwargs} last_err={repr(last_err)}"
+    if allow_empty or empty_ok_after_retry:
+        print(f"[GIVEUP-BUT-CONTINUE] {msg}")
+        return pd.DataFrame()
+    raise RuntimeError(msg)
+
+
+# =========================
+# 抓取任务定义
+# =========================
+@dataclass
+class FetchJob:
+    key: str                    # 输出文件名用
+    fn: Callable                # pro 接口函数
+    kwargs: Dict[str, Any]      # 参数
+    allow_empty: bool = True    # 是否允许空
+    required: bool = False      # 是否关键任务（关键任务失败是否要让整体失败）
+    note: str = ""              # 备注
+
+
+def build_jobs(pro, trade_date: str) -> List[FetchJob]:
+    """
+    你可以在这里自由增删接口任务。
+    下面给了几个“快照型”常用接口的示例（并且都做了空数据容忍，避免早晨/非交易日挂掉）。
+    """
+    jobs: List[FetchJob] = []
+
+    # 涨跌停列表（日）
+    jobs.append(
+        FetchJob(
+            key="limit_list_d",
+            fn=pro.limit_list_d,
+            kwargs={"trade_date": trade_date},
+            allow_empty=True,     # 这个经常会空（尤其是非交易日/数据未更新）
+            required=False,
+            note="涨跌停列表（日）",
+        )
+    )
+
+    # 每日指标（可能需要更高权限；若你权限不够会报错，但不会影响其它任务）
+    jobs.append(
+        FetchJob(
+            key="daily_basic",
+            fn=pro.daily_basic,
+            kwargs={"trade_date": trade_date},
+            allow_empty=True,
+            required=False,
+            note="每日指标（市值/换手等）",
+        )
+    )
+
+    # 龙虎榜（也可能空）
+    jobs.append(
+        FetchJob(
+            key="top_list",
+            fn=pro.top_list,
+            kwargs={"trade_date": trade_date},
+            allow_empty=True,
+            required=False,
+            note="龙虎榜",
+        )
+    )
+
+    # 北向资金（可能需要权限/可能空）
+    jobs.append(
+        FetchJob(
+            key="moneyflow_hsgt",
+            fn=pro.moneyflow_hsgt,
+            kwargs={"trade_date": trade_date},
+            allow_empty=True,
+            required=False,
+            note="沪深港通资金流向",
+        )
+    )
+
+    return jobs
+
 
 # =========================
 # 主程序：抓取并落地快照
 # =========================
 def main():
     # 允许手动回补：workflow_dispatch / 本地运行时可传入
-    trade_date = os.getenv("TRADE_DATE", "").strip()
-    if not trade_date:
-        trade_date = bj_today_yyyymmdd()
+    requested_trade_date = os.getenv("TRADE_DATE", "").strip()
+
+    pro = get_pro()
+    trade_date = resolve_trade_date(pro, requested_trade_date)
 
     year = trade_date[:4]
     base_raw = Path("data/raw") / year / trade_date
@@ -78,35 +247,84 @@ def main():
     ensure_dir(base_raw)
     ensure_dir(base_latest)
 
-    pro = get_pro()
+    retry_cfg = RetryConfig(
+        max_retry=int(os.getenv("MAX_RETRY", "10")),
+        base_sleep_sec=float(os.getenv("BASE_SLEEP_SEC", "2")),
+        max_sleep_sec=float(os.getenv("MAX_SLEEP_SEC", "20")),
+        jitter_sec=float(os.getenv("JITTER_SEC", "0.8")),
+    )
 
-    # 你当前脚本里用到的：limit_list_d（涨跌停列表-日）
-    df_limit_d = call_with_retry(pro.limit_list_d, trade_date=trade_date)
-
-    # 落地：按日期目录
-    out_csv = base_raw / "limit_list_d.csv"
-    save_df(df_limit_d, out_csv)
-
-    # 同时维护 latest 软链接式“最新文件”（用复制实现，兼容 GitHub Pages/Windows）
-    out_latest_csv = base_latest / "limit_list_d.csv"
-    save_df(df_limit_d, out_latest_csv)
-
-    # 额外写一个 meta，方便你后面核验/前端展示
-    meta = {
-        "trade_date": trade_date,
+    meta: Dict[str, Any] = {
+        "requested_trade_date": requested_trade_date or None,
+        "resolved_trade_date": trade_date,
         "generated_at_bj": bj_now().strftime("%Y-%m-%d %H:%M:%S"),
-        "rows": int(len(df_limit_d)),
-        "files": {
-            "raw_csv": str(out_csv.as_posix()),
-            "latest_csv": str(out_latest_csv.as_posix()),
-        },
+        "jobs": [],
     }
-    save_json(meta, base_raw / "meta.json")
-    save_json(meta, base_latest / "meta.json")
 
-    print(f"[OK] trade_date={trade_date} rows={len(df_limit_d)}")
-    print(f"[OK] saved: {out_csv}")
-    print(f"[OK] saved: {out_latest_csv}")
+    jobs = build_jobs(pro, trade_date)
+
+    any_required_failed = False
+
+    for job in jobs:
+        out_csv = base_raw / f"{job.key}.csv"
+        out_latest = base_latest / f"{job.key}.csv"
+
+        job_record: Dict[str, Any] = {
+            "key": job.key,
+            "note": job.note,
+            "allow_empty": job.allow_empty,
+            "required": job.required,
+            "kwargs": job.kwargs,
+            "status": "unknown",
+            "rows": None,
+            "error": None,
+        }
+
+        try:
+            df = call_with_retry(
+                job.fn,
+                retry=retry_cfg,
+                allow_empty=job.allow_empty,
+                empty_ok_after_retry=True,   # 核心：即便空也不让 workflow 挂
+                **job.kwargs,
+            )
+
+            save_df(df, out_csv)
+            # 同步 latest（覆盖）
+            save_df(df, out_latest)
+
+            job_record["status"] = "ok" if not df.empty else "ok_empty"
+            job_record["rows"] = int(len(df))
+
+        except Exception as e:
+            job_record["status"] = "failed"
+            job_record["error"] = repr(e)
+
+            print(f"[JOB-FAILED] {job.key} err={repr(e)}")
+            print(traceback.format_exc())
+
+            # 即使失败，也落一个空文件，保证下游不炸（可选）
+            try:
+                save_df(pd.DataFrame(), out_csv)
+                save_df(pd.DataFrame(), out_latest)
+            except Exception:
+                pass
+
+            if job.required:
+                any_required_failed = True
+
+        meta["jobs"].append(job_record)
+
+    safe_json_dump(meta, base_raw / "_meta.json")
+    safe_json_dump(meta, base_latest / "_meta.json")
+
+    # 只有“required=True”的任务失败才让整体失败
+    if any_required_failed:
+        raise RuntimeError("Some required jobs failed. Check data/raw/.../_meta.json for details.")
+
+    print("[DONE] snapshots saved.")
+    print(json.dumps(meta, ensure_ascii=False, indent=2))
+
 
 if __name__ == "__main__":
     main()
