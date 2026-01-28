@@ -1,7 +1,7 @@
 {
   "requested_trade_date": null,
   "resolved_trade_date": "20260128",
-  "generated_at_bj": "2026-01-28 16:03:31",
+  "generated_at_bj": "2026-01-28 21:02:13",
   "jobs": [
     {
       "key": "limit_list_d",
@@ -11,8 +11,8 @@
       "kwargs": {
         "trade_date": "20260128"
       },
-      "status": "ok_empty",
-      "rows": 0,
+      "status": "ok",
+      "rows": 111,
       "error": null
     },
     {
@@ -23,8 +23,8 @@
       "kwargs": {
         "trade_date": "20260128"
       },
-      "status": "ok_empty",
-      "rows": 0,
+      "status": "ok",
+      "rows": 5464,
       "error": null
     },
     {
@@ -35,8 +35,8 @@
       "kwargs": {
         "trade_date": "20260128"
       },
-      "status": "ok_empty",
-      "rows": 0,
+      "status": "ok",
+      "rows": 83,
       "error": null
     },
     {
@@ -47,8 +47,8 @@
       "kwargs": {
         "trade_date": "20260128"
       },
-      "status": "ok_empty",
-      "rows": 0,
+      "status": "ok",
+      "rows": 1,
       "error": null
     }
   ]
