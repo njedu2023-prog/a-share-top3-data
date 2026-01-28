@@ -1,18 +1,18 @@
+name: Cron Probe
+on:
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
 jobs:
   probe:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Write heartbeat
+      - name: Print time
         run: |
-          mkdir -p data/heartbeat
-          date -u +"%Y-%m-%dT%H:%M:%SZ" > data/heartbeat/cron_probe_utc.txt
-
-      - name: Commit heartbeat
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add data/heartbeat/cron_probe_utc.txt
-          git commit -m "chore: cron probe heartbeat" || echo "No changes"
-          git push
+          echo "UTC: $(date -u)"
+          echo "BEIJING: $(TZ=Asia/Shanghai date)"
+          echo "probe ok"
