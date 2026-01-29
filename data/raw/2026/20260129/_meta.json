@@ -1,7 +1,7 @@
 {
   "requested_trade_date": null,
   "resolved_trade_date": "20260129",
-  "generated_at_bj": "2026-01-29 19:46:15",
+  "generated_at_bj": "2026-01-29 22:16:21",
   "jobs": [
     {
       "key": "limit_list_d",
@@ -16,15 +16,82 @@
       "error": null
     },
     {
-      "key": "daily_basic",
-      "note": "每日指标（市值/换手等）",
+      "key": "limit_break_d",
+      "note": "炸板/开板（日）",
       "allow_empty": true,
       "required": false,
       "kwargs": {
         "trade_date": "20260129"
       },
+      "status": "ok_empty",
+      "rows": 0,
+      "error": null
+    },
+    {
+      "key": "daily",
+      "note": "日线行情（OHLCV+amount）",
+      "allow_empty": true,
+      "required": false,
+      "kwargs": {
+        "trade_date": "20260129",
+        "fields": "ts_code,trade_date,open,high,low,close,vol,amount,pct_chg"
+      },
       "status": "ok",
       "rows": 5465,
+      "error": null
+    },
+    {
+      "key": "stk_limit",
+      "note": "涨跌停价（限制价格）",
+      "allow_empty": true,
+      "required": false,
+      "kwargs": {
+        "trade_date": "20260129",
+        "fields": "ts_code,trade_date,up_limit,down_limit"
+      },
+      "status": "ok",
+      "rows": 7449,
+      "error": null
+    },
+    {
+      "key": "daily_basic",
+      "note": "每日指标（换手/市值/量比）",
+      "allow_empty": true,
+      "required": false,
+      "kwargs": {
+        "trade_date": "20260129",
+        "fields": "ts_code,trade_date,turnover_rate,turnover_rate_f,volume_ratio,total_mv,float_mv"
+      },
+      "status": "ok",
+      "rows": 5465,
+      "error": null
+    },
+    {
+      "key": "stock_basic",
+      "note": "股票基础信息（name/industry/list_date等）",
+      "allow_empty": true,
+      "required": false,
+      "kwargs": {
+        "exchange": "",
+        "list_status": "L",
+        "fields": "ts_code,symbol,name,area,industry,market,list_date"
+      },
+      "status": "ok",
+      "rows": 5476,
+      "error": null
+    },
+    {
+      "key": "namechange",
+      "note": "名称变更（用于ST/更名等过滤）",
+      "allow_empty": true,
+      "required": false,
+      "kwargs": {
+        "start_date": "20251230",
+        "end_date": "20260129",
+        "fields": "ts_code,name,start_date,end_date,change_reason"
+      },
+      "status": "ok",
+      "rows": 20,
       "error": null
     },
     {
@@ -51,5 +118,12 @@
       "rows": 1,
       "error": null
     }
-  ]
+  ],
+  "derived": {
+    "hot_board_tags": {
+      "hot_board_topn": 10,
+      "hot_boards": 10,
+      "tagged": 128
+    }
+  }
 }
