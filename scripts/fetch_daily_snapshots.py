@@ -6,7 +6,7 @@ import traceback
 from dataclasses import dataclass
 from pathlib import Path
 from datetime import datetime
-from typing import Any, Callable, Dict, Optional, List, Tuple
+from typing import Any, Callable, Dict, Optional, List
 
 import pandas as pd
 import tushare as ts
@@ -31,6 +31,7 @@ def ensure_dir(p: Path) -> None:
 
 
 def safe_json_dump(obj: Any, path: Path) -> None:
+    ensure_dir(path.parent)
     path.write_text(json.dumps(obj, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
@@ -38,6 +39,15 @@ def save_df(df: pd.DataFrame, out_csv: Path) -> None:
     # df 可能为空：也要能正常落地，避免 workflow 失败
     ensure_dir(out_csv.parent)
     df.to_csv(out_csv, index=False, encoding="utf-8-sig")
+
+
+def load_csv(path: Path) -> pd.DataFrame:
+    try:
+        if path.exists() and path.stat().st_size > 0:
+            return pd.read_csv(path, dtype=str, encoding="utf-8-sig")
+    except Exception:
+        pass
+    return pd.DataFrame()
 
 
 def fn_display_name(fn: Callable) -> str:
@@ -175,60 +185,261 @@ class FetchJob:
 
 def build_jobs(pro, trade_date: str) -> List[FetchJob]:
     """
-    你可以在这里自由增删接口任务。
-    下面给了几个“快照型”常用接口的示例（并且都做了空数据容忍，避免早晨/非交易日挂掉）。
+    日频数据仓库（打板Top10系统）所需的最小核心数据：
+    1) limit_list_d      涨停/跌停列表（日）
+    2) limit_break_d     炸板/开板（日）——用于情绪过滤炸板率
+    3) daily             日线OHLCV+amount ——用于振幅/收盘接近最高/量能等代理因子
+    4) stk_limit         涨跌停价 ——用于触板/一字等代理判断
+    5) daily_basic       换手/市值 ——用于结构过滤与排序因子
+    可选：
+    6) stock_basic       股票基础信息（name/industry/list_date等）
+    7) namechange        名称变更（用于ST/更名等过滤标记）
+    8) top_list          龙虎榜（可选）
+    9) moneyflow_hsgt    北向资金（可选）
     """
     jobs: List[FetchJob] = []
 
-    # 涨跌停列表（日）
+    # 1) 涨跌停列表（日）
     jobs.append(
         FetchJob(
             key="limit_list_d",
             fn=pro.limit_list_d,
             kwargs={"trade_date": trade_date},
-            allow_empty=True,     # 这个经常会空（尤其是非交易日/数据未更新）
+            allow_empty=True,
             required=False,
             note="涨跌停列表（日）",
         )
     )
 
-    # 每日指标（可能需要更高权限；若你权限不够会报错，但不会影响其它任务）
+    # 2) 炸板/开板（日）——情绪过滤关键：炸板率
+    # （若你权限不足或当日无数据也可能为空，允许空）
+    if hasattr(pro, "limit_break_d"):
+        jobs.append(
+            FetchJob(
+                key="limit_break_d",
+                fn=pro.limit_break_d,
+                kwargs={"trade_date": trade_date},
+                allow_empty=True,
+                required=False,
+                note="炸板/开板（日）",
+            )
+        )
+
+    # 3) 日线行情（日频核心）
+    jobs.append(
+        FetchJob(
+            key="daily",
+            fn=pro.daily,
+            kwargs={
+                "trade_date": trade_date,
+                "fields": "ts_code,trade_date,open,high,low,close,vol,amount,pct_chg"
+            },
+            allow_empty=True,
+            required=False,
+            note="日线行情（OHLCV+amount）",
+        )
+    )
+
+    # 4) 涨跌停价（用于触板/一字等代理指标）
+    jobs.append(
+        FetchJob(
+            key="stk_limit",
+            fn=pro.stk_limit,
+            kwargs={
+                "trade_date": trade_date,
+                "fields": "ts_code,trade_date,up_limit,down_limit"
+            },
+            allow_empty=True,
+            required=False,
+            note="涨跌停价（限制价格）",
+        )
+    )
+
+    # 5) 每日指标（换手/市值等，尽量只留必要字段）
     jobs.append(
         FetchJob(
             key="daily_basic",
             fn=pro.daily_basic,
-            kwargs={"trade_date": trade_date},
+            kwargs={
+                "trade_date": trade_date,
+                "fields": "ts_code,trade_date,turnover_rate,turnover_rate_f,volume_ratio,total_mv,float_mv"
+            },
             allow_empty=True,
             required=False,
-            note="每日指标（市值/换手等）",
+            note="每日指标（换手/市值/量比）",
         )
     )
 
-    # 龙虎榜（也可能空）
+    # 6) 股票基础信息（建议加：补齐 name/industry/list_date）
     jobs.append(
         FetchJob(
-            key="top_list",
-            fn=pro.top_list,
-            kwargs={"trade_date": trade_date},
+            key="stock_basic",
+            fn=pro.stock_basic,
+            kwargs={
+                "exchange": "",
+                "list_status": "L",
+                "fields": "ts_code,symbol,name,area,industry,market,list_date"
+            },
             allow_empty=True,
             required=False,
-            note="龙虎榜",
+            note="股票基础信息（name/industry/list_date等）",
         )
     )
 
-    # 北向资金（可能需要权限/可能空）
+    # 7) 名称变更（用于识别ST等过滤标记）——日频轻量取近30天
     jobs.append(
         FetchJob(
-            key="moneyflow_hsgt",
-            fn=pro.moneyflow_hsgt,
-            kwargs={"trade_date": trade_date},
+            key="namechange",
+            fn=pro.namechange,
+            kwargs={
+                "start_date": (datetime.strptime(trade_date, "%Y%m%d") - pd.Timedelta(days=30)).strftime("%Y%m%d"),
+                "end_date": trade_date,
+                "fields": "ts_code,name,start_date,end_date,change_reason"
+            },
             allow_empty=True,
             required=False,
-            note="沪深港通资金流向",
+            note="名称变更（用于ST/更名等过滤）",
         )
     )
+
+    # 8) 龙虎榜（可选）
+    if hasattr(pro, "top_list"):
+        jobs.append(
+            FetchJob(
+                key="top_list",
+                fn=pro.top_list,
+                kwargs={"trade_date": trade_date},
+                allow_empty=True,
+                required=False,
+                note="龙虎榜",
+            )
+        )
+
+    # 9) 沪深港通资金流向（可选）
+    if hasattr(pro, "moneyflow_hsgt"):
+        jobs.append(
+            FetchJob(
+                key="moneyflow_hsgt",
+                fn=pro.moneyflow_hsgt,
+                kwargs={"trade_date": trade_date},
+                allow_empty=True,
+                required=False,
+                note="沪深港通资金流向",
+            )
+        )
 
     return jobs
+
+
+# =========================
+# 派生：热门板块/核心板块标签（日频、低算力）
+# =========================
+def derive_hot_board_tags(
+    trade_date: str,
+    base_raw: Path,
+    base_latest: Path,
+) -> Dict[str, Any]:
+    """
+    用“行业(=板块代理)”来做当日热门板块：
+    - 统计当日涨停股在各行业的数量
+    - 取 TopN 行业作为“热门板块”
+    - 对每只涨停股打标签：是否热门板块、板块排名、板块涨停数
+
+    产物：
+      data/raw/YYYY/YYYYMMDD/hot_boards.csv
+      data/raw/YYYY/YYYYMMDD/limit_up_tags.csv
+      data/latest/hot_boards.csv
+      data/latest/limit_up_tags.csv
+    """
+    topn = int(os.getenv("HOT_BOARD_TOPN", "10"))
+
+    limit_path = base_latest / "limit_list_d.csv"
+    basic_path = base_latest / "stock_basic.csv"
+    namechg_path = base_latest / "namechange.csv"
+
+    limit_df = load_csv(limit_path)
+    basic_df = load_csv(basic_path)
+    namechg_df = load_csv(namechg_path)
+
+    # 若没有涨停数据或基础信息，仍落空文件
+    if limit_df.empty or basic_df.empty:
+        empty_hot = pd.DataFrame(columns=["trade_date", "industry", "limit_up_count", "rank"])
+        empty_tags = pd.DataFrame(columns=[
+            "trade_date", "ts_code", "name", "industry",
+            "is_hot_board", "board_rank", "board_limit_up_count",
+            "is_st_like"
+        ])
+        save_df(empty_hot, base_raw / "hot_boards.csv")
+        save_df(empty_tags, base_raw / "limit_up_tags.csv")
+        save_df(empty_hot, base_latest / "hot_boards.csv")
+        save_df(empty_tags, base_latest / "limit_up_tags.csv")
+        return {"hot_board_topn": topn, "hot_boards": 0, "tagged": 0}
+
+    # 只保留 ts_code/name
+    limit_df = limit_df.copy()
+    if "ts_code" not in limit_df.columns:
+        # 极端：接口结构不符
+        return {"hot_board_topn": topn, "hot_boards": 0, "tagged": 0, "warn": "limit_list_d missing ts_code"}
+
+    # 股票基础信息：ts_code -> name/industry
+    basic_df = basic_df.copy()
+    keep_cols = [c for c in ["ts_code", "name", "industry"] if c in basic_df.columns]
+    basic_df = basic_df[keep_cols].drop_duplicates(subset=["ts_code"])
+
+    merged = limit_df.merge(basic_df, on="ts_code", how="left", suffixes=("", "_basic"))
+    merged["industry"] = merged.get("industry", "").fillna("").astype(str)
+    merged["name"] = merged.get("name", "").fillna("").astype(str)
+
+    # ST识别（轻量）：namechange里 change_reason 或 name 包含 ST
+    st_like = set()
+    try:
+        if not namechg_df.empty and "ts_code" in namechg_df.columns:
+            # 只要近30天出现过 ST/撤销ST/退市整理等字样，就标记为 st_like
+            reason_col = "change_reason" if "change_reason" in namechg_df.columns else None
+            if reason_col:
+                tmp = namechg_df.copy()
+                tmp[reason_col] = tmp[reason_col].fillna("").astype(str)
+                hit = tmp[tmp[reason_col].str.contains("ST|退市|整理|*ST", regex=True, na=False)]
+                st_like.update(hit["ts_code"].astype(str).tolist())
+    except Exception:
+        pass
+
+    # 行业统计（热门板块）
+    ind_stat = (
+        merged[merged["industry"] != ""]
+        .groupby("industry", as_index=False)["ts_code"]
+        .nunique()
+        .rename(columns={"ts_code": "limit_up_count"})
+        .sort_values(["limit_up_count", "industry"], ascending=[False, True])
+        .reset_index(drop=True)
+    )
+    ind_stat["rank"] = ind_stat.index + 1
+    ind_stat = ind_stat.head(topn).copy()
+    ind_stat.insert(0, "trade_date", trade_date)
+
+    hot_industries = set(ind_stat["industry"].astype(str).tolist())
+    rank_map = {row["industry"]: int(row["rank"]) for _, row in ind_stat.iterrows()}
+    cnt_map = {row["industry"]: int(row["limit_up_count"]) for _, row in ind_stat.iterrows()}
+
+    # 对涨停股打标签
+    tags = merged[["ts_code", "name", "industry"]].drop_duplicates(subset=["ts_code"]).copy()
+    tags.insert(0, "trade_date", trade_date)
+    tags["is_hot_board"] = tags["industry"].apply(lambda x: 1 if str(x) in hot_industries else 0)
+    tags["board_rank"] = tags["industry"].apply(lambda x: rank_map.get(str(x), ""))
+    tags["board_limit_up_count"] = tags["industry"].apply(lambda x: cnt_map.get(str(x), ""))
+    tags["is_st_like"] = tags["ts_code"].apply(lambda x: 1 if str(x) in st_like or ("ST" in str(tags.loc[tags["ts_code"] == x, "name"].values[0]) if len(tags.loc[tags["ts_code"] == x, "name"].values) else False) else 0)
+
+    # 落盘
+    save_df(ind_stat, base_raw / "hot_boards.csv")
+    save_df(tags, base_raw / "limit_up_tags.csv")
+    save_df(ind_stat, base_latest / "hot_boards.csv")
+    save_df(tags, base_latest / "limit_up_tags.csv")
+
+    return {
+        "hot_board_topn": topn,
+        "hot_boards": int(len(ind_stat)),
+        "tagged": int(len(tags)),
+    }
 
 
 # =========================
@@ -259,6 +470,7 @@ def main():
         "resolved_trade_date": trade_date,
         "generated_at_bj": bj_now().strftime("%Y-%m-%d %H:%M:%S"),
         "jobs": [],
+        "derived": {},
     }
 
     jobs = build_jobs(pro, trade_date)
@@ -315,8 +527,23 @@ def main():
 
         meta["jobs"].append(job_record)
 
+    # 先写 meta（不影响稳定性）
     safe_json_dump(meta, base_raw / "_meta.json")
     safe_json_dump(meta, base_latest / "_meta.json")
+
+    # 派生：热门板块标签（纯本地计算，几乎无算力）
+    try:
+        derived_info = derive_hot_board_tags(trade_date, base_raw, base_latest)
+        meta["derived"]["hot_board_tags"] = derived_info
+        # 覆写更新一次 meta
+        safe_json_dump(meta, base_raw / "_meta.json")
+        safe_json_dump(meta, base_latest / "_meta.json")
+    except Exception as e:
+        meta["derived"]["hot_board_tags"] = {"status": "failed", "error": repr(e)}
+        safe_json_dump(meta, base_raw / "_meta.json")
+        safe_json_dump(meta, base_latest / "_meta.json")
+        print(f"[DERIVED-FAILED] hot_board_tags err={repr(e)}")
+        print(traceback.format_exc())
 
     # 只有“required=True”的任务失败才让整体失败
     if any_required_failed:
