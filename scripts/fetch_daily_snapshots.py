@@ -237,7 +237,7 @@ def _fields_to_columns(fields: Optional[str]) -> List[str]:
 def build_jobs(pro, trade_date: str) -> List[FetchJob]:
     """
     日频数据仓库（打板Top10系统）所需的最小核心数据：
-    1) limit_list_d      涨停/跌停列表（日）
+    1) limit_list_d      涨停池（系统级强制：只保留涨停）
     2) limit_break_d     炸板/开板（日）——用于情绪过滤炸板率
     3) daily             日线OHLCV+amount ——用于振幅/收盘接近最高/量能等代理因子
     4) stk_limit         涨跌停价 ——用于触板/一字等代理判断
@@ -251,19 +251,23 @@ def build_jobs(pro, trade_date: str) -> List[FetchJob]:
     jobs: List[FetchJob] = []
 
     # --- schemas（保证空表也有表头）---
-    # 对于没指定 fields 的接口：至少保证 ts_code、trade_date 这两个关键列存在
     schema_min_code_date = ["ts_code", "trade_date"]
 
-    # 1) 涨跌停列表（日）
+    # 1) 涨停池（日）——系统级强制：limit_list_d.csv 必须只包含涨停股
+    # 显式 fields，确保能拿到 limit_type/close/up_limit/down_limit 以支持强制过滤
+    limit_list_fields = "trade_date,ts_code,name,limit_type,close,up_limit,down_limit"
     jobs.append(
         FetchJob(
             key="limit_list_d",
             fn=pro.limit_list_d,
-            kwargs={"trade_date": trade_date},
-            columns=schema_min_code_date,
+            kwargs={
+                "trade_date": trade_date,
+                "fields": limit_list_fields,
+            },
+            columns=_fields_to_columns(limit_list_fields) or schema_min_code_date,
             allow_empty=True,
             required=False,
-            note="涨跌停列表（日）",
+            note="涨停池（日）（系统级：limit_list_d 强制只保留涨停）",
         )
     )
 
@@ -580,6 +584,30 @@ def main():
                 empty_ok_after_retry=True,   # 核心：即便空也不让 workflow 挂
                 **job.kwargs,
             )
+
+            # =========================
+            # 系统级强制约束：
+            # limit_list_d.csv 收盘后必须“只包含涨停股”
+            # 计算引擎不再做过滤
+            # =========================
+            if job.key == "limit_list_d" and df is not None and not df.empty:
+                # 1) 优先使用 limit_type 字段：U=涨停，D=跌停
+                if "limit_type" in df.columns:
+                    tmp = df.copy()
+                    tmp["limit_type"] = tmp["limit_type"].astype(str).str.upper()
+                    df = tmp[tmp["limit_type"] == "U"].copy()
+
+                # 2) 兜底：若 limit_type 不存在，则用 close >= up_limit 判断
+                elif "close" in df.columns and "up_limit" in df.columns:
+                    tmp = df.copy()
+                    tmp["close_num"] = pd.to_numeric(tmp["close"], errors="coerce")
+                    tmp["up_limit_num"] = pd.to_numeric(tmp["up_limit"], errors="coerce")
+                    tmp = tmp[tmp["close_num"].notna() & tmp["up_limit_num"].notna()]
+                    tmp = tmp[tmp["close_num"] >= tmp["up_limit_num"]]
+                    df = tmp.drop(columns=["close_num", "up_limit_num"], errors="ignore").copy()
+
+                # 3) 若两者都没有：不做过滤，避免误伤成空（但这种情况理论上不会发生）
+                meta["derived"]["limit_list_d_policy"] = "ONLY_LIMIT_UP"
 
             save_df(df, out_csv, columns=job.columns)
             save_df(df, out_latest, columns=job.columns)
