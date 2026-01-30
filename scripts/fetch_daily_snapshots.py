@@ -232,7 +232,7 @@ def build_jobs(pro, trade_date: str) -> List[FetchJob]:
             fn=pro.daily,
             kwargs={
                 "trade_date": trade_date,
-                "fields": "ts_code,trade_date,open,high,low,close,vol,amount,pct_chg"
+                "fields": "ts_code,trade_date,open,high,low,close,vol,amount,pct_chg",
             },
             allow_empty=True,
             required=False,
@@ -247,7 +247,7 @@ def build_jobs(pro, trade_date: str) -> List[FetchJob]:
             fn=pro.stk_limit,
             kwargs={
                 "trade_date": trade_date,
-                "fields": "ts_code,trade_date,up_limit,down_limit"
+                "fields": "ts_code,trade_date,up_limit,down_limit",
             },
             allow_empty=True,
             required=False,
@@ -262,7 +262,7 @@ def build_jobs(pro, trade_date: str) -> List[FetchJob]:
             fn=pro.daily_basic,
             kwargs={
                 "trade_date": trade_date,
-                "fields": "ts_code,trade_date,turnover_rate,turnover_rate_f,volume_ratio,total_mv,float_mv"
+                "fields": "ts_code,trade_date,turnover_rate,turnover_rate_f,volume_ratio,total_mv,float_mv",
             },
             allow_empty=True,
             required=False,
@@ -278,7 +278,7 @@ def build_jobs(pro, trade_date: str) -> List[FetchJob]:
             kwargs={
                 "exchange": "",
                 "list_status": "L",
-                "fields": "ts_code,symbol,name,area,industry,market,list_date"
+                "fields": "ts_code,symbol,name,area,industry,market,list_date",
             },
             allow_empty=True,
             required=False,
@@ -294,7 +294,7 @@ def build_jobs(pro, trade_date: str) -> List[FetchJob]:
             kwargs={
                 "start_date": (datetime.strptime(trade_date, "%Y%m%d") - pd.Timedelta(days=30)).strftime("%Y%m%d"),
                 "end_date": trade_date,
-                "fields": "ts_code,name,start_date,end_date,change_reason"
+                "fields": "ts_code,name,start_date,end_date,change_reason",
             },
             allow_empty=True,
             required=False,
@@ -364,21 +364,27 @@ def derive_hot_board_tags(
     # 若没有涨停数据或基础信息，仍落空文件
     if limit_df.empty or basic_df.empty:
         empty_hot = pd.DataFrame(columns=["trade_date", "industry", "limit_up_count", "rank"])
-        empty_tags = pd.DataFrame(columns=[
-            "trade_date", "ts_code", "name", "industry",
-            "is_hot_board", "board_rank", "board_limit_up_count",
-            "is_st_like"
-        ])
+        empty_tags = pd.DataFrame(
+            columns=[
+                "trade_date",
+                "ts_code",
+                "name",
+                "industry",
+                "is_hot_board",
+                "board_rank",
+                "board_limit_up_count",
+                "is_st_like",
+            ]
+        )
         save_df(empty_hot, base_raw / "hot_boards.csv")
         save_df(empty_tags, base_raw / "limit_up_tags.csv")
         save_df(empty_hot, base_latest / "hot_boards.csv")
         save_df(empty_tags, base_latest / "limit_up_tags.csv")
         return {"hot_board_topn": topn, "hot_boards": 0, "tagged": 0}
 
-    # 只保留 ts_code/name
+    # 必须有 ts_code
     limit_df = limit_df.copy()
     if "ts_code" not in limit_df.columns:
-        # 极端：接口结构不符
         return {"hot_board_topn": topn, "hot_boards": 0, "tagged": 0, "warn": "limit_list_d missing ts_code"}
 
     # 股票基础信息：ts_code -> name/industry
@@ -387,20 +393,32 @@ def derive_hot_board_tags(
     basic_df = basic_df[keep_cols].drop_duplicates(subset=["ts_code"])
 
     merged = limit_df.merge(basic_df, on="ts_code", how="left", suffixes=("", "_basic"))
-    merged["industry"] = merged.get("industry", "").fillna("").astype(str)
-    merged["name"] = merged.get("name", "").fillna("").astype(str)
+    # 保底字段
+    if "industry" not in merged.columns:
+        merged["industry"] = ""
+    if "name" not in merged.columns:
+        merged["name"] = ""
 
-    # ST识别（轻量）：namechange里 change_reason 或 name 包含 ST
+    merged["industry"] = merged["industry"].fillna("").astype(str)
+    merged["name"] = merged["name"].fillna("").astype(str)
+    merged["ts_code"] = merged["ts_code"].fillna("").astype(str)
+
+    # ST识别（轻量）：
+    # 1) name 里包含 ST / *ST
+    # 2) namechange.change_reason 里包含 ST / *ST / 退市 / 整理 等关键词
     st_like = set()
+
     try:
         if not namechg_df.empty and "ts_code" in namechg_df.columns:
-            # 只要近30天出现过 ST/撤销ST/退市整理等字样，就标记为 st_like
-            reason_col = "change_reason" if "change_reason" in namechg_df.columns else None
+            tmp = namechg_df.copy()
+            tmp["ts_code"] = tmp["ts_code"].fillna("").astype(str)
+
+            reason_col = "change_reason" if "change_reason" in tmp.columns else None
             if reason_col:
-                tmp = namechg_df.copy()
                 tmp[reason_col] = tmp[reason_col].fillna("").astype(str)
-                hit = tmp[tmp[reason_col].str.contains("ST|退市|整理|*ST", regex=True, na=False)]
-                st_like.update(hit["ts_code"].astype(str).tolist())
+                # 注意：\*ST 才是字面量 "*ST"
+                hit = tmp[tmp[reason_col].str.contains(r"ST|\*ST|退市|整理", regex=True, na=False)]
+                st_like.update(hit["ts_code"].tolist())
     except Exception:
         pass
 
@@ -421,13 +439,17 @@ def derive_hot_board_tags(
     rank_map = {row["industry"]: int(row["rank"]) for _, row in ind_stat.iterrows()}
     cnt_map = {row["industry"]: int(row["limit_up_count"]) for _, row in ind_stat.iterrows()}
 
-    # 对涨停股打标签
+    # 对涨停股打标签（去重 ts_code）
     tags = merged[["ts_code", "name", "industry"]].drop_duplicates(subset=["ts_code"]).copy()
     tags.insert(0, "trade_date", trade_date)
-    tags["is_hot_board"] = tags["industry"].apply(lambda x: 1 if str(x) in hot_industries else 0)
-    tags["board_rank"] = tags["industry"].apply(lambda x: rank_map.get(str(x), ""))
-    tags["board_limit_up_count"] = tags["industry"].apply(lambda x: cnt_map.get(str(x), ""))
-    tags["is_st_like"] = tags["ts_code"].apply(lambda x: 1 if str(x) in st_like or ("ST" in str(tags.loc[tags["ts_code"] == x, "name"].values[0]) if len(tags.loc[tags["ts_code"] == x, "name"].values) else False) else 0)
+
+    tags["is_hot_board"] = tags["industry"].astype(str).isin(hot_industries).astype(int)
+    tags["board_rank"] = tags["industry"].astype(str).map(rank_map).fillna("")
+    tags["board_limit_up_count"] = tags["industry"].astype(str).map(cnt_map).fillna("")
+
+    name_has_st = tags["name"].fillna("").astype(str).str.contains(r"ST|\*ST", regex=True, na=False)
+    code_in_st_like = tags["ts_code"].fillna("").astype(str).isin(st_like)
+    tags["is_st_like"] = (name_has_st | code_in_st_like).astype(int)
 
     # 落盘
     save_df(ind_stat, base_raw / "hot_boards.csv")
@@ -502,7 +524,6 @@ def main():
             )
 
             save_df(df, out_csv)
-            # 同步 latest（覆盖）
             save_df(df, out_latest)
 
             job_record["status"] = "ok" if not df.empty else "ok_empty"
@@ -535,7 +556,6 @@ def main():
     try:
         derived_info = derive_hot_board_tags(trade_date, base_raw, base_latest)
         meta["derived"]["hot_board_tags"] = derived_info
-        # 覆写更新一次 meta
         safe_json_dump(meta, base_raw / "_meta.json")
         safe_json_dump(meta, base_latest / "_meta.json")
     except Exception as e:
