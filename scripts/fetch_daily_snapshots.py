@@ -35,13 +35,56 @@ def safe_json_dump(obj: Any, path: Path) -> None:
     path.write_text(json.dumps(obj, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
-def save_df(df: pd.DataFrame, out_csv: Path) -> None:
-    # df 可能为空：也要能正常落地，避免 workflow 失败
+def _normalize_columns(cols: Optional[List[str]]) -> Optional[List[str]]:
+    if not cols:
+        return None
+    out = []
+    seen = set()
+    for c in cols:
+        c = str(c).strip()
+        if not c or c in seen:
+            continue
+        seen.add(c)
+        out.append(c)
+    return out or None
+
+
+def save_df(df: pd.DataFrame, out_csv: Path, *, columns: Optional[List[str]] = None) -> None:
+    """
+    关键保证：
+    - df 有数据：正常写出
+    - df 无数据：也要写出“带表头”的标准 CSV（至少包含 columns 指定的列）
+    """
     ensure_dir(out_csv.parent)
+
+    cols = _normalize_columns(columns)
+
+    if df is None:
+        df = pd.DataFrame()
+
+    # 若 df 为空且没有列，但我们知道期望列：写一个只有表头的空表
+    if df.empty and (df.columns is None or len(df.columns) == 0) and cols:
+        df = pd.DataFrame(columns=cols)
+
+    # 若 df 非空但缺少部分期望列：补齐（不影响已有数据）
+    if cols:
+        for c in cols:
+            if c not in df.columns:
+                df[c] = pd.NA
+        # 可选：让期望列排在前面，其他列跟在后面
+        front = [c for c in cols if c in df.columns]
+        rest = [c for c in df.columns if c not in front]
+        df = df[front + rest]
+
     df.to_csv(out_csv, index=False, encoding="utf-8-sig")
 
 
 def load_csv(path: Path) -> pd.DataFrame:
+    """
+    兼容：
+    - 正常 CSV
+    - 只有 BOM / 空文件 / 读取失败：返回空 DataFrame
+    """
     try:
         if path.exists() and path.stat().st_size > 0:
             return pd.read_csv(path, dtype=str, encoding="utf-8-sig")
@@ -178,9 +221,17 @@ class FetchJob:
     key: str                    # 输出文件名用
     fn: Callable                # pro 接口函数
     kwargs: Dict[str, Any]      # 参数
+    columns: List[str]          # 期望输出表头（哪怕没数据也要写出来）
     allow_empty: bool = True    # 是否允许空
     required: bool = False      # 是否关键任务（关键任务失败是否要让整体失败）
     note: str = ""              # 备注
+
+
+def _fields_to_columns(fields: Optional[str]) -> List[str]:
+    if not fields:
+        return []
+    cols = [c.strip() for c in fields.split(",") if c.strip()]
+    return cols
 
 
 def build_jobs(pro, trade_date: str) -> List[FetchJob]:
@@ -199,26 +250,31 @@ def build_jobs(pro, trade_date: str) -> List[FetchJob]:
     """
     jobs: List[FetchJob] = []
 
+    # --- schemas（保证空表也有表头）---
+    # 对于没指定 fields 的接口：至少保证 ts_code、trade_date 这两个关键列存在
+    schema_min_code_date = ["ts_code", "trade_date"]
+
     # 1) 涨跌停列表（日）
     jobs.append(
         FetchJob(
             key="limit_list_d",
             fn=pro.limit_list_d,
             kwargs={"trade_date": trade_date},
+            columns=schema_min_code_date,
             allow_empty=True,
             required=False,
             note="涨跌停列表（日）",
         )
     )
 
-    # 2) 炸板/开板（日）——情绪过滤关键：炸板率
-    # （若你权限不足或当日无数据也可能为空，允许空）
+    # 2) 炸板/开板（日）
     if hasattr(pro, "limit_break_d"):
         jobs.append(
             FetchJob(
                 key="limit_break_d",
                 fn=pro.limit_break_d,
                 kwargs={"trade_date": trade_date},
+                columns=schema_min_code_date,  # 下游至少需要 ts_code 不然会炸
                 allow_empty=True,
                 required=False,
                 note="炸板/开板（日）",
@@ -226,14 +282,16 @@ def build_jobs(pro, trade_date: str) -> List[FetchJob]:
         )
 
     # 3) 日线行情（日频核心）
+    daily_fields = "ts_code,trade_date,open,high,low,close,vol,amount,pct_chg"
     jobs.append(
         FetchJob(
             key="daily",
             fn=pro.daily,
             kwargs={
                 "trade_date": trade_date,
-                "fields": "ts_code,trade_date,open,high,low,close,vol,amount,pct_chg",
+                "fields": daily_fields,
             },
+            columns=_fields_to_columns(daily_fields),
             allow_empty=True,
             required=False,
             note="日线行情（OHLCV+amount）",
@@ -241,36 +299,41 @@ def build_jobs(pro, trade_date: str) -> List[FetchJob]:
     )
 
     # 4) 涨跌停价（用于触板/一字等代理指标）
+    stk_limit_fields = "ts_code,trade_date,up_limit,down_limit"
     jobs.append(
         FetchJob(
             key="stk_limit",
             fn=pro.stk_limit,
             kwargs={
                 "trade_date": trade_date,
-                "fields": "ts_code,trade_date,up_limit,down_limit",
+                "fields": stk_limit_fields,
             },
+            columns=_fields_to_columns(stk_limit_fields),
             allow_empty=True,
             required=False,
             note="涨跌停价（限制价格）",
         )
     )
 
-    # 5) 每日指标（换手/市值等，尽量只留必要字段）
+    # 5) 每日指标（换手/市值等）
+    daily_basic_fields = "ts_code,trade_date,turnover_rate,turnover_rate_f,volume_ratio,total_mv,float_mv"
     jobs.append(
         FetchJob(
             key="daily_basic",
             fn=pro.daily_basic,
             kwargs={
                 "trade_date": trade_date,
-                "fields": "ts_code,trade_date,turnover_rate,turnover_rate_f,volume_ratio,total_mv,float_mv",
+                "fields": daily_basic_fields,
             },
+            columns=_fields_to_columns(daily_basic_fields),
             allow_empty=True,
             required=False,
             note="每日指标（换手/市值/量比）",
         )
     )
 
-    # 6) 股票基础信息（建议加：补齐 name/industry/list_date）
+    # 6) 股票基础信息
+    stock_basic_fields = "ts_code,symbol,name,area,industry,market,list_date"
     jobs.append(
         FetchJob(
             key="stock_basic",
@@ -278,15 +341,17 @@ def build_jobs(pro, trade_date: str) -> List[FetchJob]:
             kwargs={
                 "exchange": "",
                 "list_status": "L",
-                "fields": "ts_code,symbol,name,area,industry,market,list_date",
+                "fields": stock_basic_fields,
             },
+            columns=_fields_to_columns(stock_basic_fields),
             allow_empty=True,
             required=False,
             note="股票基础信息（name/industry/list_date等）",
         )
     )
 
-    # 7) 名称变更（用于识别ST等过滤标记）——日频轻量取近30天
+    # 7) 名称变更
+    namechange_fields = "ts_code,name,start_date,end_date,change_reason"
     jobs.append(
         FetchJob(
             key="namechange",
@@ -294,8 +359,9 @@ def build_jobs(pro, trade_date: str) -> List[FetchJob]:
             kwargs={
                 "start_date": (datetime.strptime(trade_date, "%Y%m%d") - pd.Timedelta(days=30)).strftime("%Y%m%d"),
                 "end_date": trade_date,
-                "fields": "ts_code,name,start_date,end_date,change_reason",
+                "fields": namechange_fields,
             },
+            columns=_fields_to_columns(namechange_fields),
             allow_empty=True,
             required=False,
             note="名称变更（用于ST/更名等过滤）",
@@ -309,6 +375,7 @@ def build_jobs(pro, trade_date: str) -> List[FetchJob]:
                 key="top_list",
                 fn=pro.top_list,
                 kwargs={"trade_date": trade_date},
+                columns=schema_min_code_date,
                 allow_empty=True,
                 required=False,
                 note="龙虎榜",
@@ -322,6 +389,7 @@ def build_jobs(pro, trade_date: str) -> List[FetchJob]:
                 key="moneyflow_hsgt",
                 fn=pro.moneyflow_hsgt,
                 kwargs={"trade_date": trade_date},
+                columns=schema_min_code_date,
                 allow_empty=True,
                 required=False,
                 note="沪深港通资金流向",
@@ -344,12 +412,6 @@ def derive_hot_board_tags(
     - 统计当日涨停股在各行业的数量
     - 取 TopN 行业作为“热门板块”
     - 对每只涨停股打标签：是否热门板块、板块排名、板块涨停数
-
-    产物：
-      data/raw/YYYY/YYYYMMDD/hot_boards.csv
-      data/raw/YYYY/YYYYMMDD/limit_up_tags.csv
-      data/latest/hot_boards.csv
-      data/latest/limit_up_tags.csv
     """
     topn = int(os.getenv("HOT_BOARD_TOPN", "10"))
 
@@ -361,7 +423,7 @@ def derive_hot_board_tags(
     basic_df = load_csv(basic_path)
     namechg_df = load_csv(namechg_path)
 
-    # 若没有涨停数据或基础信息，仍落空文件
+    # 若没有涨停数据或基础信息，仍落空文件（但带表头）
     if limit_df.empty or basic_df.empty:
         empty_hot = pd.DataFrame(columns=["trade_date", "industry", "limit_up_count", "rank"])
         empty_tags = pd.DataFrame(
@@ -376,10 +438,10 @@ def derive_hot_board_tags(
                 "is_st_like",
             ]
         )
-        save_df(empty_hot, base_raw / "hot_boards.csv")
-        save_df(empty_tags, base_raw / "limit_up_tags.csv")
-        save_df(empty_hot, base_latest / "hot_boards.csv")
-        save_df(empty_tags, base_latest / "limit_up_tags.csv")
+        save_df(empty_hot, base_raw / "hot_boards.csv", columns=list(empty_hot.columns))
+        save_df(empty_tags, base_raw / "limit_up_tags.csv", columns=list(empty_tags.columns))
+        save_df(empty_hot, base_latest / "hot_boards.csv", columns=list(empty_hot.columns))
+        save_df(empty_tags, base_latest / "limit_up_tags.csv", columns=list(empty_tags.columns))
         return {"hot_board_topn": topn, "hot_boards": 0, "tagged": 0}
 
     # 必须有 ts_code
@@ -403,11 +465,8 @@ def derive_hot_board_tags(
     merged["name"] = merged["name"].fillna("").astype(str)
     merged["ts_code"] = merged["ts_code"].fillna("").astype(str)
 
-    # ST识别（轻量）：
-    # 1) name 里包含 ST / *ST
-    # 2) namechange.change_reason 里包含 ST / *ST / 退市 / 整理 等关键词
+    # ST识别（轻量）
     st_like = set()
-
     try:
         if not namechg_df.empty and "ts_code" in namechg_df.columns:
             tmp = namechg_df.copy()
@@ -416,7 +475,6 @@ def derive_hot_board_tags(
             reason_col = "change_reason" if "change_reason" in tmp.columns else None
             if reason_col:
                 tmp[reason_col] = tmp[reason_col].fillna("").astype(str)
-                # 注意：\*ST 才是字面量 "*ST"
                 hit = tmp[tmp[reason_col].str.contains(r"ST|\*ST|退市|整理", regex=True, na=False)]
                 st_like.update(hit["ts_code"].tolist())
     except Exception:
@@ -451,11 +509,11 @@ def derive_hot_board_tags(
     code_in_st_like = tags["ts_code"].fillna("").astype(str).isin(st_like)
     tags["is_st_like"] = (name_has_st | code_in_st_like).astype(int)
 
-    # 落盘
-    save_df(ind_stat, base_raw / "hot_boards.csv")
-    save_df(tags, base_raw / "limit_up_tags.csv")
-    save_df(ind_stat, base_latest / "hot_boards.csv")
-    save_df(tags, base_latest / "limit_up_tags.csv")
+    # 落盘（保证表头）
+    save_df(ind_stat, base_raw / "hot_boards.csv", columns=list(ind_stat.columns))
+    save_df(tags, base_raw / "limit_up_tags.csv", columns=list(tags.columns))
+    save_df(ind_stat, base_latest / "hot_boards.csv", columns=list(ind_stat.columns))
+    save_df(tags, base_latest / "limit_up_tags.csv", columns=list(tags.columns))
 
     return {
         "hot_board_topn": topn,
@@ -523,8 +581,8 @@ def main():
                 **job.kwargs,
             )
 
-            save_df(df, out_csv)
-            save_df(df, out_latest)
+            save_df(df, out_csv, columns=job.columns)
+            save_df(df, out_latest, columns=job.columns)
 
             job_record["status"] = "ok" if not df.empty else "ok_empty"
             job_record["rows"] = int(len(df))
@@ -536,10 +594,10 @@ def main():
             print(f"[JOB-FAILED] {job.key} err={repr(e)}")
             print(traceback.format_exc())
 
-            # 即使失败，也落一个空文件，保证下游不炸（可选）
+            # 即使失败，也落一个“带表头”的空文件，保证下游不炸
             try:
-                save_df(pd.DataFrame(), out_csv)
-                save_df(pd.DataFrame(), out_latest)
+                save_df(pd.DataFrame(), out_csv, columns=job.columns)
+                save_df(pd.DataFrame(), out_latest, columns=job.columns)
             except Exception:
                 pass
 
