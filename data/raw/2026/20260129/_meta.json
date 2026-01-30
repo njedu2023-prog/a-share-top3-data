@@ -1,7 +1,7 @@
 {
-  "requested_trade_date": null,
+  "requested_trade_date": "20260129",
   "resolved_trade_date": "20260129",
-  "generated_at_bj": "2026-01-29 22:16:21",
+  "generated_at_bj": "2026-01-30 18:50:11",
   "jobs": [
     {
       "key": "limit_list_d",
@@ -77,7 +77,7 @@
         "fields": "ts_code,symbol,name,area,industry,market,list_date"
       },
       "status": "ok",
-      "rows": 5476,
+      "rows": 5477,
       "error": null
     },
     {
