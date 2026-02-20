@@ -1,7 +1,7 @@
 {
-  "requested_trade_date": "20260204",
-  "resolved_trade_date": "20260204",
-  "generated_at_bj": "2026-02-21 04:17:38",
+  "requested_trade_date": "20260203",
+  "resolved_trade_date": "20260203",
+  "generated_at_bj": "2026-02-21 04:22:28",
   "jobs": [
     {
       "key": "limit_list_d",
@@ -9,11 +9,11 @@
       "allow_empty": true,
       "required": false,
       "kwargs": {
-        "trade_date": "20260204",
+        "trade_date": "20260203",
         "fields": "trade_date,ts_code,name,limit_type,close,up_limit,down_limit,open_times,fd_amount,first_time,last_time"
       },
       "status": "ok",
-      "rows": 92,
+      "rows": 96,
       "error": null
     },
     {
@@ -22,7 +22,7 @@
       "allow_empty": true,
       "required": false,
       "kwargs": {
-        "trade_date": "20260204",
+        "trade_date": "20260203",
         "fields": "trade_date,ts_code,name,open_times,first_time,last_time,fd_amount"
       },
       "status": "ok_empty",
@@ -35,11 +35,11 @@
       "allow_empty": true,
       "required": false,
       "kwargs": {
-        "trade_date": "20260204",
+        "trade_date": "20260203",
         "fields": "ts_code,trade_date,open,high,low,close,vol,amount,pct_chg"
       },
       "status": "ok",
-      "rows": 5468,
+      "rows": 5465,
       "error": null
     },
     {
@@ -48,7 +48,7 @@
       "allow_empty": true,
       "required": false,
       "kwargs": {
-        "trade_date": "20260204",
+        "trade_date": "20260203",
         "fields": "ts_code,trade_date,up_limit,down_limit"
       },
       "status": "ok",
@@ -61,11 +61,11 @@
       "allow_empty": true,
       "required": false,
       "kwargs": {
-        "trade_date": "20260204",
+        "trade_date": "20260203",
         "fields": "ts_code,trade_date,turnover_rate,turnover_rate_f,volume_ratio,total_mv,float_mv"
       },
       "status": "ok",
-      "rows": 5468,
+      "rows": 5465,
       "error": null
     },
     {
@@ -88,12 +88,12 @@
       "allow_empty": true,
       "required": false,
       "kwargs": {
-        "start_date": "20260105",
-        "end_date": "20260204",
+        "start_date": "20260104",
+        "end_date": "20260203",
         "fields": "ts_code,name,start_date,end_date,change_reason"
       },
       "status": "ok",
-      "rows": 20,
+      "rows": 19,
       "error": null
     },
     {
@@ -102,10 +102,10 @@
       "allow_empty": true,
       "required": false,
       "kwargs": {
-        "trade_date": "20260204"
+        "trade_date": "20260203"
       },
       "status": "ok",
-      "rows": 73,
+      "rows": 93,
       "error": null
     },
     {
@@ -114,7 +114,7 @@
       "allow_empty": true,
       "required": false,
       "kwargs": {
-        "trade_date": "20260204"
+        "trade_date": "20260203"
       },
       "status": "ok",
       "rows": 1,
@@ -138,7 +138,7 @@
     "hot_board_tags": {
       "hot_board_topn": 10,
       "hot_boards": 10,
-      "tagged": 92
+      "tagged": 96
     }
   }
 }
