@@ -71,7 +71,7 @@ def save_df(df: pd.DataFrame, out_csv: Path, *, columns: Optional[List[str]] = N
         for c in cols:
             if c not in df.columns:
                 df[c] = pd.NA
-        # 可选：让期望列排在前面，其他列跟在后面
+        # 让期望列排在前面
         front = [c for c in cols if c in df.columns]
         rest = [c for c in df.columns if c not in front]
         df = df[front + rest]
@@ -125,22 +125,18 @@ def resolve_trade_date(pro, requested_trade_date: str) -> str:
     """
     target = requested_trade_date.strip() if requested_trade_date else bj_today_yyyymmdd()
 
-    # 为了“最近交易日”回退，需要向前多取一些天
     end_date = target
     start_date = (datetime.strptime(target, "%Y%m%d") - pd.Timedelta(days=30)).strftime("%Y%m%d")
 
     cal = pro.trade_cal(exchange="SSE", start_date=start_date, end_date=end_date)
     if cal is None or cal.empty:
-        # 极端情况：拿不到日历就原样返回
         return target
 
     cal = cal.sort_values("cal_date")
-    # target 当天是否开市
     row = cal[cal["cal_date"] == target]
     if not row.empty and int(row.iloc[0]["is_open"]) == 1:
         return target
 
-    # 回退到 <= target 的最近开市日
     opened = cal[cal["is_open"] == 1]
     opened = opened[opened["cal_date"] <= target]
     if opened.empty:
@@ -189,8 +185,6 @@ def call_with_retry(
                 if allow_empty:
                     print(f"[OK-EMPTY] {name} kwargs={kwargs} -> empty dataframe (allowed)")
                     return df
-
-                # 不允许空：触发重试
                 raise RuntimeError(f"empty dataframe (not allowed): {name} kwargs={kwargs}")
 
             print(f"[OK] {name} kwargs={kwargs} -> rows={len(df)}")
@@ -198,14 +192,11 @@ def call_with_retry(
 
         except Exception as e:
             last_err = e
-
-            # 指数退避 + 抖动
             sleep = min(retry.max_sleep_sec, retry.base_sleep_sec * (2 ** (i - 1)))
             sleep = sleep + random.random() * retry.jitter_sec
             print(f"[RETRY {i}/{retry.max_retry}] {name} kwargs={kwargs} err={repr(e)} sleep={sleep:.1f}s")
             time.sleep(sleep)
 
-    # 重试耗尽
     msg = f"Failed after {retry.max_retry} retries: {name} kwargs={kwargs} last_err={repr(last_err)}"
     if allow_empty or empty_ok_after_retry:
         print(f"[GIVEUP-BUT-CONTINUE] {msg}")
@@ -218,70 +209,80 @@ def call_with_retry(
 # =========================
 @dataclass
 class FetchJob:
-    key: str                    # 输出文件名用
-    fn: Callable                # pro 接口函数
-    kwargs: Dict[str, Any]      # 参数
-    columns: List[str]          # 期望输出表头（哪怕没数据也要写出来）
-    allow_empty: bool = True    # 是否允许空
-    required: bool = False      # 是否关键任务（关键任务失败是否要让整体失败）
-    note: str = ""              # 备注
+    key: str
+    fn: Callable
+    kwargs: Dict[str, Any]
+    columns: List[str]
+    allow_empty: bool = True
+    required: bool = False
+    note: str = ""
 
 
 def _fields_to_columns(fields: Optional[str]) -> List[str]:
     if not fields:
         return []
-    cols = [c.strip() for c in fields.split(",") if c.strip()]
-    return cols
+    return [c.strip() for c in fields.split(",") if c.strip()]
 
 
 def build_jobs(pro, trade_date: str) -> List[FetchJob]:
     """
     日频数据仓库（打板Top10系统）所需的最小核心数据：
-    1) limit_list_d      涨停池（系统级强制：只保留涨停）
-    2) limit_break_d     炸板/开板（日）——用于情绪过滤炸板率
-    3) daily             日线OHLCV+amount ——用于振幅/收盘接近最高/量能等代理因子
-    4) stk_limit         涨跌停价 ——用于触板/一字等代理判断
-    5) daily_basic       换手/市值 ——用于结构过滤与排序因子
+    1) limit_list_d      涨停池（系统级强制：只保留涨停）——本版本补齐 open_times + seal_amount
+    2) limit_break_d     炸板/开板（日）——本版本显式拉取 open_times 等字段
+    3) daily             日线OHLCV+amount
+    4) stk_limit         涨跌停价
+    5) daily_basic       换手/市值
     可选：
-    6) stock_basic       股票基础信息（name/industry/list_date等）
-    7) namechange        名称变更（用于ST/更名等过滤标记）
-    8) top_list          龙虎榜（可选）
-    9) moneyflow_hsgt    北向资金（可选）
+    6) stock_basic
+    7) namechange
+    8) top_list
+    9) moneyflow_hsgt
     """
     jobs: List[FetchJob] = []
 
-    # --- schemas（保证空表也有表头）---
     schema_min_code_date = ["ts_code", "trade_date"]
 
-    # 1) 涨停池（日）——系统级强制：limit_list_d.csv 必须只包含涨停股
-    # 显式 fields，确保能拿到 limit_type/close/up_limit/down_limit 以支持强制过滤
-    limit_list_fields = "trade_date,ts_code,name,limit_type,close,up_limit,down_limit"
+    # ==========
+    # 1) limit_list_d：强制补齐涨停质量核心字段
+    #
+    # 说明：
+    # - open_times：开板/炸板次数（涨停质量核心）
+    # - fd_amount ：封单金额（tushare 原字段），我们会在落盘后映射为 seal_amount
+    #
+    # 注：不同 tushare 版本/权限下，字段集合可能略不同；这里采用“显式 fields + 落盘补列”双保险。
+    # ==========
+    limit_list_fields = (
+        "trade_date,ts_code,name,limit_type,close,up_limit,down_limit,"
+        "open_times,fd_amount,first_time,last_time"
+    )
     jobs.append(
         FetchJob(
             key="limit_list_d",
             fn=pro.limit_list_d,
-            kwargs={
-                "trade_date": trade_date,
-                "fields": limit_list_fields,
-            },
+            kwargs={"trade_date": trade_date, "fields": limit_list_fields},
             columns=_fields_to_columns(limit_list_fields) or schema_min_code_date,
             allow_empty=True,
             required=False,
-            note="涨停池（日）（系统级：limit_list_d 强制只保留涨停）",
+            note="涨停池（日）（系统级：只保留涨停；补齐 open_times + seal_amount(=fd_amount)）",
         )
     )
 
-    # 2) 炸板/开板（日）
+    # ==========
+    # 2) limit_break_d：炸板/开板（日）
+    # - 为了拿到 open_times，尽量用 fields（如果接口支持）
+    # ==========
     if hasattr(pro, "limit_break_d"):
+        # 尝试显式 fields（如果该接口不支持 fields，call_with_retry 会重试并可能仍成功/返回空）
+        limit_break_fields = "trade_date,ts_code,name,open_times,first_time,last_time,fd_amount"
         jobs.append(
             FetchJob(
                 key="limit_break_d",
                 fn=pro.limit_break_d,
-                kwargs={"trade_date": trade_date},
-                columns=schema_min_code_date,  # 下游至少需要 ts_code 不然会炸
+                kwargs={"trade_date": trade_date, "fields": limit_break_fields},
+                columns=_fields_to_columns(limit_break_fields) or (schema_min_code_date + ["open_times"]),
                 allow_empty=True,
                 required=False,
-                note="炸板/开板（日）",
+                note="炸板/开板（日）（显式拉取 open_times）",
             )
         )
 
@@ -291,10 +292,7 @@ def build_jobs(pro, trade_date: str) -> List[FetchJob]:
         FetchJob(
             key="daily",
             fn=pro.daily,
-            kwargs={
-                "trade_date": trade_date,
-                "fields": daily_fields,
-            },
+            kwargs={"trade_date": trade_date, "fields": daily_fields},
             columns=_fields_to_columns(daily_fields),
             allow_empty=True,
             required=False,
@@ -302,16 +300,13 @@ def build_jobs(pro, trade_date: str) -> List[FetchJob]:
         )
     )
 
-    # 4) 涨跌停价（用于触板/一字等代理指标）
+    # 4) 涨跌停价
     stk_limit_fields = "ts_code,trade_date,up_limit,down_limit"
     jobs.append(
         FetchJob(
             key="stk_limit",
             fn=pro.stk_limit,
-            kwargs={
-                "trade_date": trade_date,
-                "fields": stk_limit_fields,
-            },
+            kwargs={"trade_date": trade_date, "fields": stk_limit_fields},
             columns=_fields_to_columns(stk_limit_fields),
             allow_empty=True,
             required=False,
@@ -325,10 +320,7 @@ def build_jobs(pro, trade_date: str) -> List[FetchJob]:
         FetchJob(
             key="daily_basic",
             fn=pro.daily_basic,
-            kwargs={
-                "trade_date": trade_date,
-                "fields": daily_basic_fields,
-            },
+            kwargs={"trade_date": trade_date, "fields": daily_basic_fields},
             columns=_fields_to_columns(daily_basic_fields),
             allow_empty=True,
             required=False,
@@ -342,11 +334,7 @@ def build_jobs(pro, trade_date: str) -> List[FetchJob]:
         FetchJob(
             key="stock_basic",
             fn=pro.stock_basic,
-            kwargs={
-                "exchange": "",
-                "list_status": "L",
-                "fields": stock_basic_fields,
-            },
+            kwargs={"exchange": "", "list_status": "L", "fields": stock_basic_fields},
             columns=_fields_to_columns(stock_basic_fields),
             allow_empty=True,
             required=False,
@@ -411,12 +399,6 @@ def derive_hot_board_tags(
     base_raw: Path,
     base_latest: Path,
 ) -> Dict[str, Any]:
-    """
-    用“行业(=板块代理)”来做当日热门板块：
-    - 统计当日涨停股在各行业的数量
-    - 取 TopN 行业作为“热门板块”
-    - 对每只涨停股打标签：是否热门板块、板块排名、板块涨停数
-    """
     topn = int(os.getenv("HOT_BOARD_TOPN", "10"))
 
     limit_path = base_latest / "limit_list_d.csv"
@@ -427,7 +409,6 @@ def derive_hot_board_tags(
     basic_df = load_csv(basic_path)
     namechg_df = load_csv(namechg_path)
 
-    # 若没有涨停数据或基础信息，仍落空文件（但带表头）
     if limit_df.empty or basic_df.empty:
         empty_hot = pd.DataFrame(columns=["trade_date", "industry", "limit_up_count", "rank"])
         empty_tags = pd.DataFrame(
@@ -448,18 +429,16 @@ def derive_hot_board_tags(
         save_df(empty_tags, base_latest / "limit_up_tags.csv", columns=list(empty_tags.columns))
         return {"hot_board_topn": topn, "hot_boards": 0, "tagged": 0}
 
-    # 必须有 ts_code
     limit_df = limit_df.copy()
     if "ts_code" not in limit_df.columns:
         return {"hot_board_topn": topn, "hot_boards": 0, "tagged": 0, "warn": "limit_list_d missing ts_code"}
 
-    # 股票基础信息：ts_code -> name/industry
     basic_df = basic_df.copy()
     keep_cols = [c for c in ["ts_code", "name", "industry"] if c in basic_df.columns]
     basic_df = basic_df[keep_cols].drop_duplicates(subset=["ts_code"])
 
     merged = limit_df.merge(basic_df, on="ts_code", how="left", suffixes=("", "_basic"))
-    # 保底字段
+
     if "industry" not in merged.columns:
         merged["industry"] = ""
     if "name" not in merged.columns:
@@ -484,7 +463,6 @@ def derive_hot_board_tags(
     except Exception:
         pass
 
-    # 行业统计（热门板块）
     ind_stat = (
         merged[merged["industry"] != ""]
         .groupby("industry", as_index=False)["ts_code"]
@@ -501,7 +479,6 @@ def derive_hot_board_tags(
     rank_map = {row["industry"]: int(row["rank"]) for _, row in ind_stat.iterrows()}
     cnt_map = {row["industry"]: int(row["limit_up_count"]) for _, row in ind_stat.iterrows()}
 
-    # 对涨停股打标签（去重 ts_code）
     tags = merged[["ts_code", "name", "industry"]].drop_duplicates(subset=["ts_code"]).copy()
     tags.insert(0, "trade_date", trade_date)
 
@@ -513,24 +490,55 @@ def derive_hot_board_tags(
     code_in_st_like = tags["ts_code"].fillna("").astype(str).isin(st_like)
     tags["is_st_like"] = (name_has_st | code_in_st_like).astype(int)
 
-    # 落盘（保证表头）
     save_df(ind_stat, base_raw / "hot_boards.csv", columns=list(ind_stat.columns))
     save_df(tags, base_raw / "limit_up_tags.csv", columns=list(tags.columns))
     save_df(ind_stat, base_latest / "hot_boards.csv", columns=list(ind_stat.columns))
     save_df(tags, base_latest / "limit_up_tags.csv", columns=list(tags.columns))
 
-    return {
-        "hot_board_topn": topn,
-        "hot_boards": int(len(ind_stat)),
-        "tagged": int(len(tags)),
-    }
+    return {"hot_board_topn": topn, "hot_boards": int(len(ind_stat)), "tagged": int(len(tags))}
 
 
 # =========================
 # 主程序：抓取并落地快照
 # =========================
+def _postprocess_limit_tables(df: pd.DataFrame, key: str, meta: Dict[str, Any]) -> pd.DataFrame:
+    """
+    补齐我们系统需要的“稳定字段名”：
+    - seal_amount：封单额（映射自 tushare 的 fd_amount）
+    - open_times ：开板/炸板次数（若缺列，补空列）
+    """
+    if df is None:
+        return pd.DataFrame()
+
+    df = df.copy()
+
+    def _ensure_col(col: str):
+        if col not in df.columns:
+            df[col] = pd.NA
+
+    if key in ("limit_list_d", "limit_break_d"):
+        _ensure_col("open_times")
+
+        # fd_amount -> seal_amount（兼容字段缺失）
+        if "seal_amount" not in df.columns:
+            if "fd_amount" in df.columns:
+                df["seal_amount"] = df["fd_amount"]
+            else:
+                df["seal_amount"] = pd.NA
+
+        # 记录一下映射策略，便于排查
+        meta.setdefault("derived", {})
+        meta["derived"].setdefault("limit_fields", {})
+        meta["derived"]["limit_fields"][key] = {
+            "has_open_times": int("open_times" in df.columns),
+            "has_fd_amount": int("fd_amount" in df.columns),
+            "has_seal_amount": int("seal_amount" in df.columns),
+        }
+
+    return df
+
+
 def main():
-    # 允许手动回补：workflow_dispatch / 本地运行时可传入
     requested_trade_date = os.getenv("TRADE_DATE", "").strip()
 
     pro = get_pro()
@@ -581,23 +589,23 @@ def main():
                 job.fn,
                 retry=retry_cfg,
                 allow_empty=job.allow_empty,
-                empty_ok_after_retry=True,   # 核心：即便空也不让 workflow 挂
+                empty_ok_after_retry=True,
                 **job.kwargs,
             )
+
+            # 补齐我们需要的稳定字段名（open_times / seal_amount）
+            df = _postprocess_limit_tables(df, job.key, meta)
 
             # =========================
             # 系统级强制约束：
             # limit_list_d.csv 收盘后必须“只包含涨停股”
-            # 计算引擎不再做过滤
             # =========================
             if job.key == "limit_list_d" and df is not None and not df.empty:
-                # 1) 优先使用 limit_type 字段：U=涨停，D=跌停
                 if "limit_type" in df.columns:
                     tmp = df.copy()
                     tmp["limit_type"] = tmp["limit_type"].astype(str).str.upper()
                     df = tmp[tmp["limit_type"] == "U"].copy()
 
-                # 2) 兜底：若 limit_type 不存在，则用 close >= up_limit 判断
                 elif "close" in df.columns and "up_limit" in df.columns:
                     tmp = df.copy()
                     tmp["close_num"] = pd.to_numeric(tmp["close"], errors="coerce")
@@ -606,9 +614,9 @@ def main():
                     tmp = tmp[tmp["close_num"] >= tmp["up_limit_num"]]
                     df = tmp.drop(columns=["close_num", "up_limit_num"], errors="ignore").copy()
 
-                # 3) 若两者都没有：不做过滤，避免误伤成空（但这种情况理论上不会发生）
                 meta["derived"]["limit_list_d_policy"] = "ONLY_LIMIT_UP"
 
+            # 写出
             save_df(df, out_csv, columns=job.columns)
             save_df(df, out_latest, columns=job.columns)
 
@@ -622,7 +630,6 @@ def main():
             print(f"[JOB-FAILED] {job.key} err={repr(e)}")
             print(traceback.format_exc())
 
-            # 即使失败，也落一个“带表头”的空文件，保证下游不炸
             try:
                 save_df(pd.DataFrame(), out_csv, columns=job.columns)
                 save_df(pd.DataFrame(), out_latest, columns=job.columns)
@@ -634,11 +641,9 @@ def main():
 
         meta["jobs"].append(job_record)
 
-    # 先写 meta（不影响稳定性）
     safe_json_dump(meta, base_raw / "_meta.json")
     safe_json_dump(meta, base_latest / "_meta.json")
 
-    # 派生：热门板块标签（纯本地计算，几乎无算力）
     try:
         derived_info = derive_hot_board_tags(trade_date, base_raw, base_latest)
         meta["derived"]["hot_board_tags"] = derived_info
@@ -651,7 +656,6 @@ def main():
         print(f"[DERIVED-FAILED] hot_board_tags err={repr(e)}")
         print(traceback.format_exc())
 
-    # 只有“required=True”的任务失败才让整体失败
     if any_required_failed:
         raise RuntimeError("Some required jobs failed. Check data/raw/.../_meta.json for details.")
 
