@@ -1,16 +1,16 @@
 {
-  "requested_trade_date": null,
+  "requested_trade_date": "20260204",
   "resolved_trade_date": "20260204",
-  "generated_at_bj": "2026-02-04 19:48:53",
+  "generated_at_bj": "2026-02-21 04:17:38",
   "jobs": [
     {
       "key": "limit_list_d",
-      "note": "涨停池（日）（系统级：limit_list_d 强制只保留涨停）",
+      "note": "涨停池（日）（系统级：只保留涨停；补齐 open_times + seal_amount(=fd_amount)）",
       "allow_empty": true,
       "required": false,
       "kwargs": {
         "trade_date": "20260204",
-        "fields": "trade_date,ts_code,name,limit_type,close,up_limit,down_limit"
+        "fields": "trade_date,ts_code,name,limit_type,close,up_limit,down_limit,open_times,fd_amount,first_time,last_time"
       },
       "status": "ok",
       "rows": 92,
@@ -18,11 +18,12 @@
     },
     {
       "key": "limit_break_d",
-      "note": "炸板/开板（日）",
+      "note": "炸板/开板（日）（显式拉取 open_times）",
       "allow_empty": true,
       "required": false,
       "kwargs": {
-        "trade_date": "20260204"
+        "trade_date": "20260204",
+        "fields": "trade_date,ts_code,name,open_times,first_time,last_time,fd_amount"
       },
       "status": "ok_empty",
       "rows": 0,
@@ -78,7 +79,7 @@
         "fields": "ts_code,symbol,name,area,industry,market,list_date"
       },
       "status": "ok",
-      "rows": 5478,
+      "rows": 5484,
       "error": null
     },
     {
@@ -121,6 +122,18 @@
     }
   ],
   "derived": {
+    "limit_fields": {
+      "limit_list_d": {
+        "has_open_times": 1,
+        "has_fd_amount": 1,
+        "has_seal_amount": 1
+      },
+      "limit_break_d": {
+        "has_open_times": 1,
+        "has_fd_amount": 0,
+        "has_seal_amount": 1
+      }
+    },
     "limit_list_d_policy": "ONLY_LIMIT_UP",
     "hot_board_tags": {
       "hot_board_topn": 10,
