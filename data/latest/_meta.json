@@ -1,19 +1,19 @@
 {
-  "requested_trade_date": "20260130",
-  "resolved_trade_date": "20260130",
-  "generated_at_bj": "2026-02-21 04:55:56",
+  "requested_trade_date": null,
+  "resolved_trade_date": "20260213",
+  "generated_at_bj": "2026-02-21 21:10:46",
   "jobs": [
     {
       "key": "limit_list_d",
-      "note": "涨停池（日）（系统级：只保留涨停；补齐 open_times + seal_amount(=fd_amount)）",
+      "note": "涨停池（日）（会在后处理中强制推导为“收盘真实涨停”并回填 up_limit/down_limit/limit_type）",
       "allow_empty": true,
       "required": false,
       "kwargs": {
-        "trade_date": "20260130",
+        "trade_date": "20260213",
         "fields": "trade_date,ts_code,name,limit_type,close,up_limit,down_limit,open_times,fd_amount,first_time,last_time"
       },
       "status": "ok",
-      "rows": 121,
+      "rows": 55,
       "error": null
     },
     {
@@ -22,7 +22,7 @@
       "allow_empty": true,
       "required": false,
       "kwargs": {
-        "trade_date": "20260130",
+        "trade_date": "20260213",
         "fields": "trade_date,ts_code,name,open_times,first_time,last_time,fd_amount"
       },
       "status": "ok_empty",
@@ -35,11 +35,11 @@
       "allow_empty": true,
       "required": false,
       "kwargs": {
-        "trade_date": "20260130",
+        "trade_date": "20260213",
         "fields": "ts_code,trade_date,open,high,low,close,vol,amount,pct_chg"
       },
       "status": "ok",
-      "rows": 5462,
+      "rows": 5474,
       "error": null
     },
     {
@@ -48,11 +48,11 @@
       "allow_empty": true,
       "required": false,
       "kwargs": {
-        "trade_date": "20260130",
+        "trade_date": "20260213",
         "fields": "ts_code,trade_date,up_limit,down_limit"
       },
       "status": "ok",
-      "rows": 7451,
+      "rows": 7481,
       "error": null
     },
     {
@@ -61,11 +61,11 @@
       "allow_empty": true,
       "required": false,
       "kwargs": {
-        "trade_date": "20260130",
+        "trade_date": "20260213",
         "fields": "ts_code,trade_date,turnover_rate,turnover_rate_f,volume_ratio,total_mv,float_mv"
       },
       "status": "ok",
-      "rows": 5462,
+      "rows": 5474,
       "error": null
     },
     {
@@ -88,12 +88,12 @@
       "allow_empty": true,
       "required": false,
       "kwargs": {
-        "start_date": "20251231",
-        "end_date": "20260130",
+        "start_date": "20260114",
+        "end_date": "20260213",
         "fields": "ts_code,name,start_date,end_date,change_reason"
       },
       "status": "ok",
-      "rows": 21,
+      "rows": 17,
       "error": null
     },
     {
@@ -102,10 +102,10 @@
       "allow_empty": true,
       "required": false,
       "kwargs": {
-        "trade_date": "20260130"
+        "trade_date": "20260213"
       },
       "status": "ok",
-      "rows": 83,
+      "rows": 57,
       "error": null
     },
     {
@@ -114,7 +114,7 @@
       "allow_empty": true,
       "required": false,
       "kwargs": {
-        "trade_date": "20260130"
+        "trade_date": "20260213"
       },
       "status": "ok",
       "rows": 1,
@@ -126,19 +126,35 @@
       "limit_list_d": {
         "has_open_times": 1,
         "has_fd_amount": 1,
-        "has_seal_amount": 1
+        "has_seal_amount": 1,
+        "has_limit_type": 0,
+        "has_up_limit": 0,
+        "has_down_limit": 0
       },
       "limit_break_d": {
         "has_open_times": 1,
         "has_fd_amount": 0,
-        "has_seal_amount": 1
+        "has_seal_amount": 1,
+        "has_limit_type": 0,
+        "has_up_limit": 0,
+        "has_down_limit": 0
       }
     },
-    "limit_list_d_policy": "ONLY_LIMIT_UP",
+    "limit_list_d_policy": {
+      "policy": "CLOSE_EQ_UP_LIMIT",
+      "trade_date": "20260213",
+      "input_rows": 55,
+      "output_rows": 32,
+      "used_daily_close": 0,
+      "used_stk_limit": 1,
+      "filled_up_limit": 55,
+      "filled_down_limit": 55,
+      "warn": ""
+    },
     "hot_board_tags": {
       "hot_board_topn": 10,
       "hot_boards": 10,
-      "tagged": 121
+      "tagged": 32
     }
   }
 }
