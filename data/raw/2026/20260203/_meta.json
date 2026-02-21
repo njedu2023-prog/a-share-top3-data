@@ -1,11 +1,11 @@
 {
   "requested_trade_date": "20260203",
   "resolved_trade_date": "20260203",
-  "generated_at_bj": "2026-02-21 04:22:28",
+  "generated_at_bj": "2026-02-22 00:20:31",
   "jobs": [
     {
       "key": "limit_list_d",
-      "note": "涨停池（日）（系统级：只保留涨停；补齐 open_times + seal_amount(=fd_amount)）",
+      "note": "涨停池（日）（会在后处理中强制推导为“收盘真实涨停”并回填 up_limit/down_limit/limit_type）",
       "allow_empty": true,
       "required": false,
       "kwargs": {
@@ -126,19 +126,35 @@
       "limit_list_d": {
         "has_open_times": 1,
         "has_fd_amount": 1,
-        "has_seal_amount": 1
+        "has_seal_amount": 1,
+        "has_limit_type": 0,
+        "has_up_limit": 0,
+        "has_down_limit": 0
       },
       "limit_break_d": {
         "has_open_times": 1,
         "has_fd_amount": 0,
-        "has_seal_amount": 1
+        "has_seal_amount": 1,
+        "has_limit_type": 0,
+        "has_up_limit": 0,
+        "has_down_limit": 0
       }
     },
-    "limit_list_d_policy": "ONLY_LIMIT_UP",
+    "limit_list_d_policy": {
+      "policy": "CLOSE_EQ_UP_LIMIT",
+      "trade_date": "20260203",
+      "input_rows": 96,
+      "output_rows": 69,
+      "used_daily_close": 0,
+      "used_stk_limit": 1,
+      "filled_up_limit": 96,
+      "filled_down_limit": 96,
+      "warn": ""
+    },
     "hot_board_tags": {
       "hot_board_topn": 10,
       "hot_boards": 10,
-      "tagged": 96
+      "tagged": 69
     }
   }
 }
