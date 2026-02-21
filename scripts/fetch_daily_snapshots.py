@@ -6,7 +6,7 @@ import traceback
 from dataclasses import dataclass
 from pathlib import Path
 from datetime import datetime
-from typing import Any, Callable, Dict, Optional, List
+from typing import Any, Callable, Dict, Optional, List, Tuple
 
 import pandas as pd
 import tushare as ts
@@ -113,6 +113,15 @@ def get_pro():
         raise RuntimeError("缺少环境变量 TUSHARE_TOKEN（请在 GitHub Secrets 里配置）")
     ts.set_token(token)
     return ts.pro_api()
+
+
+def _norm_ts_code(s: Any) -> str:
+    x = "" if s is None else str(s).strip()
+    return x
+
+
+def _to_num(series: pd.Series) -> pd.Series:
+    return pd.to_numeric(series, errors="coerce")
 
 
 # =========================
@@ -227,8 +236,8 @@ def _fields_to_columns(fields: Optional[str]) -> List[str]:
 def build_jobs(pro, trade_date: str) -> List[FetchJob]:
     """
     日频数据仓库（打板Top10系统）所需的最小核心数据：
-    1) limit_list_d      涨停池（系统级强制：只保留涨停）——本版本补齐 open_times + seal_amount
-    2) limit_break_d     炸板/开板（日）——本版本显式拉取 open_times 等字段
+    1) limit_list_d      涨停池（系统级强制：只保留“收盘真实涨停”）
+    2) limit_break_d     炸板/开板（日）
     3) daily             日线OHLCV+amount
     4) stk_limit         涨跌停价
     5) daily_basic       换手/市值
@@ -242,15 +251,7 @@ def build_jobs(pro, trade_date: str) -> List[FetchJob]:
 
     schema_min_code_date = ["ts_code", "trade_date"]
 
-    # ==========
-    # 1) limit_list_d：强制补齐涨停质量核心字段
-    #
-    # 说明：
-    # - open_times：开板/炸板次数（涨停质量核心）
-    # - fd_amount ：封单金额（tushare 原字段），我们会在落盘后映射为 seal_amount
-    #
-    # 注：不同 tushare 版本/权限下，字段集合可能略不同；这里采用“显式 fields + 落盘补列”双保险。
-    # ==========
+    # 1) limit_list_d（注意：该接口在不同权限下可能不给 up_limit/limit_type，这里先抓原始表，后面用 daily+stk_limit 推导“收盘真实涨停池”）
     limit_list_fields = (
         "trade_date,ts_code,name,limit_type,close,up_limit,down_limit,"
         "open_times,fd_amount,first_time,last_time"
@@ -263,16 +264,12 @@ def build_jobs(pro, trade_date: str) -> List[FetchJob]:
             columns=_fields_to_columns(limit_list_fields) or schema_min_code_date,
             allow_empty=True,
             required=False,
-            note="涨停池（日）（系统级：只保留涨停；补齐 open_times + seal_amount(=fd_amount)）",
+            note="涨停池（日）（会在后处理中强制推导为“收盘真实涨停”并回填 up_limit/down_limit/limit_type）",
         )
     )
 
-    # ==========
-    # 2) limit_break_d：炸板/开板（日）
-    # - 为了拿到 open_times，尽量用 fields（如果接口支持）
-    # ==========
+    # 2) limit_break_d（可选）
     if hasattr(pro, "limit_break_d"):
-        # 尝试显式 fields（如果该接口不支持 fields，call_with_retry 会重试并可能仍成功/返回空）
         limit_break_fields = "trade_date,ts_code,name,open_times,first_time,last_time,fd_amount"
         jobs.append(
             FetchJob(
@@ -286,7 +283,7 @@ def build_jobs(pro, trade_date: str) -> List[FetchJob]:
             )
         )
 
-    # 3) 日线行情（日频核心）
+    # 3) 日线行情
     daily_fields = "ts_code,trade_date,open,high,low,close,vol,amount,pct_chg"
     jobs.append(
         FetchJob(
@@ -314,7 +311,7 @@ def build_jobs(pro, trade_date: str) -> List[FetchJob]:
         )
     )
 
-    # 5) 每日指标（换手/市值等）
+    # 5) 每日指标
     daily_basic_fields = "ts_code,trade_date,turnover_rate,turnover_rate_f,volume_ratio,total_mv,float_mv"
     jobs.append(
         FetchJob(
@@ -533,9 +530,137 @@ def _postprocess_limit_tables(df: pd.DataFrame, key: str, meta: Dict[str, Any]) 
             "has_open_times": int("open_times" in df.columns),
             "has_fd_amount": int("fd_amount" in df.columns),
             "has_seal_amount": int("seal_amount" in df.columns),
+            "has_limit_type": int("limit_type" in df.columns),
+            "has_up_limit": int("up_limit" in df.columns),
+            "has_down_limit": int("down_limit" in df.columns),
         }
 
     return df
+
+
+def _enforce_close_limit_up_pool(
+    trade_date: str,
+    limit_df: pd.DataFrame,
+    daily_df: pd.DataFrame,
+    stk_limit_df: pd.DataFrame,
+    meta: Dict[str, Any],
+) -> pd.DataFrame:
+    """
+    系统级硬定义（你确认的口径）：
+    limit_list_d.csv = 当日“收盘真实涨停”的股票集合
+    判定：close == up_limit（允许极小容差）
+    同时回填：up_limit / down_limit / limit_type='U'
+    """
+    meta.setdefault("derived", {})
+    info: Dict[str, Any] = {
+        "policy": "CLOSE_EQ_UP_LIMIT",
+        "trade_date": trade_date,
+        "input_rows": int(0),
+        "output_rows": int(0),
+        "used_daily_close": 0,
+        "used_stk_limit": 0,
+        "filled_up_limit": 0,
+        "filled_down_limit": 0,
+        "warn": "",
+    }
+
+    if limit_df is None:
+        limit_df = pd.DataFrame()
+    if daily_df is None:
+        daily_df = pd.DataFrame()
+    if stk_limit_df is None:
+        stk_limit_df = pd.DataFrame()
+
+    df = limit_df.copy()
+    info["input_rows"] = int(len(df))
+
+    # 必备：ts_code
+    if df.empty or "ts_code" not in df.columns:
+        info["warn"] = "limit_list_d missing ts_code or empty"
+        meta["derived"]["limit_list_d_policy"] = info
+        return pd.DataFrame(columns=list(df.columns) if not df.empty else None)
+
+    df["ts_code"] = df["ts_code"].map(_norm_ts_code)
+
+    # 1) close：优先用 limit_list_d.close；缺则从 daily.close 回填
+    if ("close" not in df.columns) or df["close"].isna().all():
+        if (not daily_df.empty) and ("ts_code" in daily_df.columns) and ("close" in daily_df.columns):
+            tmp = daily_df.copy()
+            tmp["ts_code"] = tmp["ts_code"].map(_norm_ts_code)
+            tmp = tmp[["ts_code", "close"]].drop_duplicates(subset=["ts_code"])
+            df = df.merge(tmp, on="ts_code", how="left", suffixes=("", "_daily"))
+            info["used_daily_close"] = 1
+        else:
+            info["warn"] = "missing close and daily.close not available"
+            meta["derived"]["limit_list_d_policy"] = info
+            return pd.DataFrame(columns=list(df.columns))
+
+    # 2) up_limit/down_limit：优先用 df 自带；缺则从 stk_limit 回填
+    need_stk = False
+    if ("up_limit" not in df.columns) or df["up_limit"].isna().all():
+        need_stk = True
+    if ("down_limit" not in df.columns) or df["down_limit"].isna().all():
+        need_stk = True
+
+    if need_stk:
+        if (not stk_limit_df.empty) and ("ts_code" in stk_limit_df.columns):
+            tmp = stk_limit_df.copy()
+            tmp["ts_code"] = tmp["ts_code"].map(_norm_ts_code)
+            cols = ["ts_code"]
+            if "up_limit" in tmp.columns:
+                cols.append("up_limit")
+            if "down_limit" in tmp.columns:
+                cols.append("down_limit")
+            tmp = tmp[cols].drop_duplicates(subset=["ts_code"])
+            df = df.merge(tmp, on="ts_code", how="left", suffixes=("", "_stk"))
+            info["used_stk_limit"] = 1
+
+            # 合并后如果出现 up_limit_stk/down_limit_stk 这类列，兜底回填
+            if "up_limit" in df.columns and "up_limit_stk" in df.columns:
+                m = df["up_limit"].isna() | (df["up_limit"].astype(str).str.strip() == "")
+                df.loc[m, "up_limit"] = df.loc[m, "up_limit_stk"]
+                info["filled_up_limit"] = int(m.sum())
+                df = df.drop(columns=["up_limit_stk"], errors="ignore")
+
+            if "down_limit" in df.columns and "down_limit_stk" in df.columns:
+                m = df["down_limit"].isna() | (df["down_limit"].astype(str).str.strip() == "")
+                df.loc[m, "down_limit"] = df.loc[m, "down_limit_stk"]
+                info["filled_down_limit"] = int(m.sum())
+                df = df.drop(columns=["down_limit_stk"], errors="ignore")
+        else:
+            info["warn"] = "up_limit/down_limit missing and stk_limit not available"
+            meta["derived"]["limit_list_d_policy"] = info
+            return pd.DataFrame(columns=list(df.columns))
+
+    # 3) 数值判定：close == up_limit（容差）
+    if ("close" not in df.columns) or ("up_limit" not in df.columns):
+        info["warn"] = "missing close or up_limit after fill"
+        meta["derived"]["limit_list_d_policy"] = info
+        return pd.DataFrame(columns=list(df.columns))
+
+    close_num = _to_num(df["close"])
+    up_num = _to_num(df["up_limit"])
+
+    # 允许极小容差：绝对差 <= 1e-6 或相对差 <= 1e-6
+    eps_abs = float(os.getenv("LIMIT_UP_EPS_ABS", "1e-6"))
+    eps_rel = float(os.getenv("LIMIT_UP_EPS_REL", "1e-6"))
+
+    valid = close_num.notna() & up_num.notna()
+    diff = (close_num - up_num).abs()
+    rel = diff / up_num.abs().replace(0, pd.NA)
+    is_limit_up = valid & ((diff <= eps_abs) | (rel <= eps_rel))
+
+    out = df[is_limit_up].copy()
+
+    # 4) 强制写 limit_type='U'
+    if "limit_type" not in out.columns:
+        out["limit_type"] = "U"
+    else:
+        out["limit_type"] = "U"
+
+    info["output_rows"] = int(len(out))
+    meta["derived"]["limit_list_d_policy"] = info
+    return out
 
 
 def main():
@@ -568,10 +693,15 @@ def main():
     jobs = build_jobs(pro, trade_date)
 
     any_required_failed = False
+    dfs: Dict[str, pd.DataFrame] = {}          # 原始 df（后面可二次加工）
+    job_columns: Dict[str, List[str]] = {}     # 每个 job 的列契约（用于 save_df）
 
+    # 先抓取所有表（不急着对 limit_list_d 做最终过滤）
     for job in jobs:
         out_csv = base_raw / f"{job.key}.csv"
         out_latest = base_latest / f"{job.key}.csv"
+
+        job_columns[job.key] = job.columns
 
         job_record: Dict[str, Any] = {
             "key": job.key,
@@ -593,35 +723,16 @@ def main():
                 **job.kwargs,
             )
 
-            # 补齐我们需要的稳定字段名（open_times / seal_amount）
             df = _postprocess_limit_tables(df, job.key, meta)
 
-            # =========================
-            # 系统级强制约束：
-            # limit_list_d.csv 收盘后必须“只包含涨停股”
-            # =========================
-            if job.key == "limit_list_d" and df is not None and not df.empty:
-                if "limit_type" in df.columns:
-                    tmp = df.copy()
-                    tmp["limit_type"] = tmp["limit_type"].astype(str).str.upper()
-                    df = tmp[tmp["limit_type"] == "U"].copy()
+            dfs[job.key] = df
 
-                elif "close" in df.columns and "up_limit" in df.columns:
-                    tmp = df.copy()
-                    tmp["close_num"] = pd.to_numeric(tmp["close"], errors="coerce")
-                    tmp["up_limit_num"] = pd.to_numeric(tmp["up_limit"], errors="coerce")
-                    tmp = tmp[tmp["close_num"].notna() & tmp["up_limit_num"].notna()]
-                    tmp = tmp[tmp["close_num"] >= tmp["up_limit_num"]]
-                    df = tmp.drop(columns=["close_num", "up_limit_num"], errors="ignore").copy()
-
-                meta["derived"]["limit_list_d_policy"] = "ONLY_LIMIT_UP"
-
-            # 写出
+            # 先按原始抓取结果落盘（limit_list_d 之后会被“强制推导版”覆盖一次）
             save_df(df, out_csv, columns=job.columns)
             save_df(df, out_latest, columns=job.columns)
 
-            job_record["status"] = "ok" if not df.empty else "ok_empty"
-            job_record["rows"] = int(len(df))
+            job_record["status"] = "ok" if (df is not None and not df.empty) else "ok_empty"
+            job_record["rows"] = int(len(df)) if df is not None else 0
 
         except Exception as e:
             job_record["status"] = "failed"
@@ -629,6 +740,8 @@ def main():
 
             print(f"[JOB-FAILED] {job.key} err={repr(e)}")
             print(traceback.format_exc())
+
+            dfs[job.key] = pd.DataFrame()
 
             try:
                 save_df(pd.DataFrame(), out_csv, columns=job.columns)
@@ -640,6 +753,47 @@ def main():
                 any_required_failed = True
 
         meta["jobs"].append(job_record)
+
+    # =========================
+    # 系统级强制约束（根治点）：
+    # limit_list_d.csv 最终必须是“收盘真实涨停池”
+    # 依据：close == up_limit（用 daily + stk_limit 推导与回填）
+    # =========================
+    try:
+        limit_df = dfs.get("limit_list_d", pd.DataFrame())
+        daily_df = dfs.get("daily", pd.DataFrame())
+        stk_df = dfs.get("stk_limit", pd.DataFrame())
+
+        enforced = _enforce_close_limit_up_pool(
+            trade_date=trade_date,
+            limit_df=limit_df,
+            daily_df=daily_df,
+            stk_limit_df=stk_df,
+            meta=meta,
+        )
+
+        # 覆盖写出（raw + latest）
+        out_csv = base_raw / "limit_list_d.csv"
+        out_latest = base_latest / "limit_list_d.csv"
+
+        cols = job_columns.get("limit_list_d") or (list(enforced.columns) if not enforced.empty else [])
+        save_df(enforced, out_csv, columns=cols)
+        save_df(enforced, out_latest, columns=cols)
+
+        # 同步内存
+        dfs["limit_list_d"] = enforced
+
+        print(
+            f"[LIMIT_LIST_ENFORCED] trade_date={trade_date} rows={len(enforced)} "
+            f"policy={meta.get('derived', {}).get('limit_list_d_policy', {}).get('policy')}"
+        )
+
+    except Exception as e:
+        # 不让整个 workflow 因此挂掉，但会在 meta 中记录失败
+        meta.setdefault("derived", {})
+        meta["derived"]["limit_list_d_policy"] = {"status": "failed", "error": repr(e)}
+        print(f"[LIMIT_LIST_ENFORCED-FAILED] err={repr(e)}")
+        print(traceback.format_exc())
 
     safe_json_dump(meta, base_raw / "_meta.json")
     safe_json_dump(meta, base_latest / "_meta.json")
