@@ -1,30 +1,99 @@
 {
   "requested_trade_date": "20260123",
   "resolved_trade_date": "20260123",
-  "generated_at_bj": "2026-01-26 03:38:31",
+  "generated_at_bj": "2026-02-22 00:50:31",
   "jobs": [
     {
       "key": "limit_list_d",
-      "note": "涨跌停列表（日）",
+      "note": "涨停池（日）（会在后处理中强制推导为“收盘真实涨停”并回填 up_limit/down_limit/limit_type）",
       "allow_empty": true,
       "required": false,
       "kwargs": {
-        "trade_date": "20260123"
+        "trade_date": "20260123",
+        "fields": "trade_date,ts_code,name,limit_type,close,up_limit,down_limit,open_times,fd_amount,first_time,last_time"
       },
       "status": "ok",
       "rows": 122,
       "error": null
     },
     {
-      "key": "daily_basic",
-      "note": "每日指标（市值/换手等）",
+      "key": "limit_break_d",
+      "note": "炸板/开板（日）（显式拉取 open_times）",
       "allow_empty": true,
       "required": false,
       "kwargs": {
-        "trade_date": "20260123"
+        "trade_date": "20260123",
+        "fields": "trade_date,ts_code,name,open_times,first_time,last_time,fd_amount"
+      },
+      "status": "ok_empty",
+      "rows": 0,
+      "error": null
+    },
+    {
+      "key": "daily",
+      "note": "日线行情（OHLCV+amount）",
+      "allow_empty": true,
+      "required": false,
+      "kwargs": {
+        "trade_date": "20260123",
+        "fields": "ts_code,trade_date,open,high,low,close,vol,amount,pct_chg"
       },
       "status": "ok",
       "rows": 5467,
+      "error": null
+    },
+    {
+      "key": "stk_limit",
+      "note": "涨跌停价（限制价格）",
+      "allow_empty": true,
+      "required": false,
+      "kwargs": {
+        "trade_date": "20260123",
+        "fields": "ts_code,trade_date,up_limit,down_limit"
+      },
+      "status": "ok",
+      "rows": 7440,
+      "error": null
+    },
+    {
+      "key": "daily_basic",
+      "note": "每日指标（换手/市值/量比）",
+      "allow_empty": true,
+      "required": false,
+      "kwargs": {
+        "trade_date": "20260123",
+        "fields": "ts_code,trade_date,turnover_rate,turnover_rate_f,volume_ratio,total_mv,float_mv"
+      },
+      "status": "ok",
+      "rows": 5467,
+      "error": null
+    },
+    {
+      "key": "stock_basic",
+      "note": "股票基础信息（name/industry/list_date等）",
+      "allow_empty": true,
+      "required": false,
+      "kwargs": {
+        "exchange": "",
+        "list_status": "L",
+        "fields": "ts_code,symbol,name,area,industry,market,list_date"
+      },
+      "status": "ok",
+      "rows": 5484,
+      "error": null
+    },
+    {
+      "key": "namechange",
+      "note": "名称变更（用于ST/更名等过滤）",
+      "allow_empty": true,
+      "required": false,
+      "kwargs": {
+        "start_date": "20251224",
+        "end_date": "20260123",
+        "fields": "ts_code,name,start_date,end_date,change_reason"
+      },
+      "status": "ok",
+      "rows": 24,
       "error": null
     },
     {
@@ -51,5 +120,41 @@
       "rows": 1,
       "error": null
     }
-  ]
+  ],
+  "derived": {
+    "limit_fields": {
+      "limit_list_d": {
+        "has_open_times": 1,
+        "has_fd_amount": 1,
+        "has_seal_amount": 1,
+        "has_limit_type": 0,
+        "has_up_limit": 0,
+        "has_down_limit": 0
+      },
+      "limit_break_d": {
+        "has_open_times": 1,
+        "has_fd_amount": 0,
+        "has_seal_amount": 1,
+        "has_limit_type": 0,
+        "has_up_limit": 0,
+        "has_down_limit": 0
+      }
+    },
+    "limit_list_d_policy": {
+      "policy": "CLOSE_EQ_UP_LIMIT",
+      "trade_date": "20260123",
+      "input_rows": 122,
+      "output_rows": 104,
+      "used_daily_close": 0,
+      "used_stk_limit": 1,
+      "filled_up_limit": 122,
+      "filled_down_limit": 122,
+      "warn": ""
+    },
+    "hot_board_tags": {
+      "hot_board_topn": 10,
+      "hot_boards": 10,
+      "tagged": 104
+    }
+  }
 }
