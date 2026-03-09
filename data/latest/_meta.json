@@ -1,7 +1,7 @@
 {
   "requested_trade_date": null,
   "resolved_trade_date": "20260309",
-  "generated_at_bj": "2026-03-09 17:37:23",
+  "generated_at_bj": "2026-03-09 18:12:56",
   "jobs": [
     {
       "key": "limit_list_d",
@@ -104,8 +104,8 @@
       "kwargs": {
         "trade_date": "20260309"
       },
-      "status": "ok_empty",
-      "rows": 0,
+      "status": "ok",
+      "rows": 70,
       "error": null
     },
     {
@@ -116,8 +116,8 @@
       "kwargs": {
         "trade_date": "20260309"
       },
-      "status": "ok_empty",
-      "rows": 0,
+      "status": "ok",
+      "rows": 1,
       "error": null
     }
   ],
