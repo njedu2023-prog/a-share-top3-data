@@ -1,7 +1,7 @@
 {
   "requested_trade_date": null,
   "resolved_trade_date": "20260403",
-  "generated_at_bj": "2026-04-03 18:40:55",
+  "generated_at_bj": "2026-04-06 17:58:46",
   "jobs": [
     {
       "key": "limit_list_d",
@@ -93,7 +93,7 @@
         "fields": "ts_code,name,start_date,end_date,change_reason"
       },
       "status": "ok",
-      "rows": 15,
+      "rows": 16,
       "error": null
     },
     {
