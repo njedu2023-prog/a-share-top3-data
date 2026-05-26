@@ -21,9 +21,14 @@ permissions:
 jobs:
   fetch:
     runs-on: ubuntu-latest
+
     steps:
-      - name: Checkout
+      - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          persist-credentials: true
+          fetch-depth: 0
 
       - name: Setup Python
         uses: actions/setup-python@v5
@@ -39,14 +44,22 @@ jobs:
         env:
           TUSHARE_TOKEN: ${{ secrets.TUSHARE_TOKEN }}
           ENABLE_DRAGON_TIGER: "0"
-          TRADE_DATE: ${{ github.event.inputs.trade_date }}
+          TRADE_DATE: ${{ github.event.inputs.trade_date || '' }}
         run: |
           python scripts/fetch_daily_snapshots.py
 
-      - name: Commit data
+      - name: Commit and push data
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          git status --short
+
           git add data/raw data/latest
-          git commit -m "data: update snapshots" || echo "No changes"
-          git push
+
+          if git diff --cached --quiet; then
+            echo "No changes to commit."
+          else
+            git commit -m "data: update snapshots"
+            git push origin HEAD:main
+          fi
