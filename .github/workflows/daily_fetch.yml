@@ -37,25 +37,49 @@ jobs:
 
       - name: Install deps
         run: |
+          set -e
           python -m pip install --upgrade pip
           pip install -r requirements.txt
+
+      - name: Check required secrets
+        env:
+          TUSHARE_TOKEN: ${{ secrets.TUSHARE_TOKEN }}
+        run: |
+          set -e
+          if [ -z "${TUSHARE_TOKEN}" ]; then
+            echo "ERROR: TUSHARE_TOKEN is empty or not configured."
+            exit 1
+          fi
+          echo "TUSHARE_TOKEN is configured."
 
       - name: Fetch snapshots
         env:
           TUSHARE_TOKEN: ${{ secrets.TUSHARE_TOKEN }}
           ENABLE_DRAGON_TIGER: "0"
-          TRADE_DATE: ${{ github.event.inputs.trade_date || '' }}
+          TRADE_DATE: ${{ inputs.trade_date || '' }}
         run: |
+          set -e
           python scripts/fetch_daily_snapshots.py
 
       - name: Commit and push data
         run: |
+          set -e
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
           git status --short
 
-          git add data/raw data/latest
+          if [ -d data/raw ]; then
+            git add data/raw
+          else
+            echo "WARN: data/raw directory does not exist."
+          fi
+
+          if [ -d data/latest ]; then
+            git add data/latest
+          else
+            echo "WARN: data/latest directory does not exist, skip."
+          fi
 
           if git diff --cached --quiet; then
             echo "No changes to commit."
