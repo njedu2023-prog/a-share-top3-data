@@ -1,7 +1,7 @@
 {
   "requested_trade_date": null,
   "resolved_trade_date": "20260605",
-  "generated_at_bj": "2026-06-05 17:14:49",
+  "generated_at_bj": "2026-06-05 19:54:43",
   "jobs": [
     {
       "key": "limit_list_d",
@@ -12,8 +12,8 @@
         "trade_date": "20260605",
         "fields": "trade_date,ts_code,name,limit_type,close,up_limit,down_limit,open_times,fd_amount,first_time,last_time"
       },
-      "status": "ok_empty",
-      "rows": 0,
+      "status": "ok",
+      "rows": 136,
       "error": null
     },
     {
@@ -104,8 +104,8 @@
       "kwargs": {
         "trade_date": "20260605"
       },
-      "status": "ok_empty",
-      "rows": 0,
+      "status": "ok",
+      "rows": 83,
       "error": null
     },
     {
@@ -116,8 +116,8 @@
       "kwargs": {
         "trade_date": "20260605"
       },
-      "status": "ok_empty",
-      "rows": 0,
+      "status": "ok",
+      "rows": 1,
       "error": null
     }
   ],
@@ -143,18 +143,18 @@
     "limit_list_d_policy": {
       "policy": "CLOSE_EQ_UP_LIMIT",
       "trade_date": "20260605",
-      "input_rows": 0,
-      "output_rows": 0,
+      "input_rows": 136,
+      "output_rows": 76,
       "used_daily_close": 0,
-      "used_stk_limit": 0,
-      "filled_up_limit": 0,
-      "filled_down_limit": 0,
-      "warn": "limit_list_d missing ts_code or empty"
+      "used_stk_limit": 1,
+      "filled_up_limit": 136,
+      "filled_down_limit": 136,
+      "warn": ""
     },
     "hot_board_tags": {
       "hot_board_topn": 10,
-      "hot_boards": 0,
-      "tagged": 0
+      "hot_boards": 10,
+      "tagged": 76
     }
   }
 }
