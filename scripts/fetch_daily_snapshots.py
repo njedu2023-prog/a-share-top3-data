@@ -124,6 +124,73 @@ def _to_num(series: pd.Series) -> pd.Series:
     return pd.to_numeric(series, errors="coerce")
 
 
+def _env_bool(name: str, default: str = "1") -> bool:
+    return os.getenv(name, default).strip().lower() not in ("0", "false", "no", "off", "")
+
+
+def _env_int(name: str, default: int) -> int:
+    try:
+        return int(os.getenv(name, str(default)).strip())
+    except Exception:
+        return default
+
+
+def _clip_score(x: Any) -> float:
+    try:
+        v = float(x)
+    except Exception:
+        return 0.0
+    return max(0.0, min(100.0, v))
+
+
+def _trade_date_dash(trade_date: str) -> str:
+    return f"{trade_date[:4]}-{trade_date[4:6]}-{trade_date[6:8]}"
+
+
+def _intraday_feature_columns() -> List[str]:
+    return [
+        "ts_code",
+        "trade_date",
+        "minute_freq",
+        "minute_rows",
+        "has_minute_data",
+        "first_limit_time",
+        "last_limit_time",
+        "limit_touch_count",
+        "open_board_count",
+        "max_drawdown_after_limit",
+        "reseal_count",
+        "reseal_minutes_avg",
+        "reseal_speed_score",
+        "reseal_acceptance_score",
+        "late_volume_ratio",
+        "late_price_weakness",
+        "late_limit_hold_minutes",
+        "late_withdraw_score",
+        "limitup_path_score",
+        "limitup_quality_score",
+        "intraday_risk_score",
+        "intraday_tag",
+    ]
+
+
+def _auction_columns() -> List[str]:
+    return ["ts_code", "trade_date", "vol", "price", "amount"]
+
+
+def _minute_columns() -> List[str]:
+    return ["ts_code", "trade_time", "open", "high", "low", "close", "vol", "amount"]
+
+
+def _clear_csv_dir(path: Path) -> None:
+    ensure_dir(path)
+    for p in path.glob("*.csv"):
+        try:
+            p.unlink()
+        except Exception as e:
+            print(f"[WARN] failed to remove stale csv {p}: {repr(e)}")
+
+
 # =========================
 # 交易日处理
 # =========================
@@ -663,6 +730,465 @@ def _enforce_close_limit_up_pool(
     return out
 
 
+# =========================
+# 盘中升级：集合竞价 + 分钟 + 分时特征
+# =========================
+def safe_query(pro, api_name: str, *, fields: str = "", **params) -> Tuple[pd.DataFrame, Dict[str, Any]]:
+    """
+    Tushare 新接口兼容查询封装。
+    任何失败都只返回结构化错误，不打印 token，不影响日频主链路。
+    """
+    info: Dict[str, Any] = {
+        "ok": False,
+        "api_name": api_name,
+        "rows": 0,
+        "columns": [],
+        "error": "",
+    }
+    try:
+        kwargs = dict(params)
+        if fields:
+            kwargs["fields"] = fields
+
+        fn = getattr(pro, api_name, None)
+        if callable(fn):
+            df = fn(**kwargs)
+        elif hasattr(pro, "query"):
+            df = pro.query(api_name, **kwargs)
+        else:
+            raise RuntimeError(f"Tushare api not available: {api_name}")
+
+        if df is None:
+            df = pd.DataFrame()
+        info["ok"] = True
+        info["rows"] = int(len(df))
+        info["columns"] = [str(c) for c in df.columns]
+        print(f"[SAFE-QUERY] {api_name} params={params} rows={len(df)}")
+        return df, info
+    except Exception as e:
+        info["error"] = repr(e)
+        print(f"[SAFE-QUERY-FAILED] {api_name} params={params} err={repr(e)}")
+        return pd.DataFrame(), info
+
+
+def _read_symbol_priority(path: Path) -> List[str]:
+    df = load_csv(path)
+    if df.empty or "ts_code" not in df.columns:
+        return []
+    return [_norm_ts_code(x) for x in df["ts_code"].tolist() if _norm_ts_code(x)]
+
+
+def build_intraday_universe(day_dir: Path) -> List[str]:
+    """
+    候选池优先级：
+    limit_list_d -> limit_break_d -> top_list，去重后保持顺序。
+    """
+    out: List[str] = []
+    seen = set()
+    for name in ("limit_list_d.csv", "limit_break_d.csv", "top_list.csv"):
+        for code in _read_symbol_priority(day_dir / name):
+            if code and code not in seen:
+                seen.add(code)
+                out.append(code)
+    return out
+
+
+def fetch_auction(pro, trade_date: str, symbols: Optional[List[str]] = None) -> Tuple[pd.DataFrame, Dict[str, Any]]:
+    fields = "ts_code,trade_date,vol,price,amount"
+    errors: List[Dict[str, str]] = []
+
+    df, info = safe_query(pro, "stk_auction", fields=fields, trade_date=trade_date)
+    if info["ok"] and not df.empty:
+        return df, info
+
+    # 部分权限/版本可能不支持全市场查询，退化到候选池逐只查询。
+    frames: List[pd.DataFrame] = []
+    for ts_code in (symbols or []):
+        one, one_info = safe_query(pro, "stk_auction", fields=fields, trade_date=trade_date, ts_code=ts_code)
+        if one_info["ok"] and not one.empty:
+            frames.append(one)
+        elif one_info["error"]:
+            errors.append({"ts_code": ts_code, "error": one_info["error"]})
+
+    if frames:
+        out = pd.concat(frames, ignore_index=True)
+    else:
+        out = pd.DataFrame(columns=_fields_to_columns(fields))
+
+    return out, {
+        "ok": True,
+        "api_name": "stk_auction",
+        "rows": int(len(out)),
+        "columns": [str(c) for c in out.columns],
+        "error": info.get("error", ""),
+        "fallback_symbol_errors": errors[:20],
+    }
+
+
+def fetch_minute_for_symbol(
+    pro,
+    ts_code: str,
+    trade_date: str,
+    freq: str = "1min",
+) -> Tuple[pd.DataFrame, Dict[str, Any]]:
+    day = _trade_date_dash(trade_date)
+    fields = "ts_code,trade_time,open,high,low,close,vol,amount"
+    params = {
+        "ts_code": ts_code,
+        "start_date": f"{day} 09:30:00",
+        "end_date": f"{day} 15:00:00",
+        "freq": freq,
+    }
+    df, info = safe_query(pro, "stk_mins", fields=fields, **params)
+    if df.empty:
+        df = pd.DataFrame(columns=_fields_to_columns(fields))
+        if "ts_code" in df.columns:
+            df["ts_code"] = pd.Series(dtype="str")
+    return df, info
+
+
+def _limit_price_map(stk_limit_df: pd.DataFrame) -> Dict[str, float]:
+    if stk_limit_df is None or stk_limit_df.empty or "ts_code" not in stk_limit_df.columns or "up_limit" not in stk_limit_df.columns:
+        return {}
+    tmp = stk_limit_df.copy()
+    tmp["ts_code"] = tmp["ts_code"].map(_norm_ts_code)
+    tmp["up_limit"] = _to_num(tmp["up_limit"])
+    tmp = tmp.dropna(subset=["up_limit"]).drop_duplicates(subset=["ts_code"])
+    return {str(row["ts_code"]): float(row["up_limit"]) for _, row in tmp.iterrows()}
+
+
+def _minute_time_series(df: pd.DataFrame) -> pd.Series:
+    for col in ("trade_time", "datetime", "time", "trade_date"):
+        if col in df.columns:
+            return pd.to_datetime(df[col], errors="coerce")
+    return pd.Series([pd.NaT] * len(df), index=df.index)
+
+
+def _score_reseal_speed(avg_minutes: Optional[float], reseal_count: int) -> float:
+    if reseal_count <= 0 or avg_minutes is None or pd.isna(avg_minutes):
+        return 0.0
+    if avg_minutes <= 3:
+        return _clip_score(100 - (avg_minutes - 1) * 5)
+    if avg_minutes <= 8:
+        return _clip_score(90 - (avg_minutes - 4) * 4)
+    if avg_minutes <= 15:
+        return _clip_score(70 - (avg_minutes - 9) * 3)
+    return _clip_score(50 - min(30, avg_minutes - 15))
+
+
+def _empty_intraday_row(ts_code: str, trade_date: str, minute_freq: str) -> Dict[str, Any]:
+    return {
+        "ts_code": ts_code,
+        "trade_date": trade_date,
+        "minute_freq": minute_freq,
+        "minute_rows": 0,
+        "has_minute_data": 0,
+        "first_limit_time": "",
+        "last_limit_time": "",
+        "limit_touch_count": 0,
+        "open_board_count": 0,
+        "max_drawdown_after_limit": "",
+        "reseal_count": 0,
+        "reseal_minutes_avg": "",
+        "reseal_speed_score": 0.0,
+        "reseal_acceptance_score": 0.0,
+        "late_volume_ratio": "",
+        "late_price_weakness": "",
+        "late_limit_hold_minutes": 0,
+        "late_withdraw_score": 0.0,
+        "limitup_path_score": 0.0,
+        "limitup_quality_score": 0.0,
+        "intraday_risk_score": 100.0,
+        "intraday_tag": "missing_minute_data",
+    }
+
+
+def _build_one_intraday_feature(
+    ts_code: str,
+    df: pd.DataFrame,
+    up_limit: Optional[float],
+    trade_date: str,
+    minute_freq: str,
+) -> Dict[str, Any]:
+    row = _empty_intraday_row(ts_code, trade_date, minute_freq)
+    if df is None or df.empty:
+        return row
+    if up_limit is None or pd.isna(up_limit) or up_limit <= 0:
+        row["minute_rows"] = int(len(df))
+        row["has_minute_data"] = 1
+        row["intraday_tag"] = "missing_limit_price"
+        return row
+
+    work = df.copy()
+    times = _minute_time_series(work)
+    work["_dt"] = times
+    work = work.dropna(subset=["_dt"]).sort_values("_dt")
+    if work.empty or "close" not in work.columns:
+        return row
+
+    close = _to_num(work["close"])
+    high = _to_num(work["high"]) if "high" in work.columns else close
+    low = _to_num(work["low"]) if "low" in work.columns else close
+    vol = _to_num(work["vol"]) if "vol" in work.columns else pd.Series([0] * len(work), index=work.index)
+
+    eps_abs = float(os.getenv("LIMIT_UP_EPS_ABS", "1e-6"))
+    eps_rel = float(os.getenv("LIMIT_UP_EPS_REL", "1e-6"))
+    limit_hit = (high - up_limit).abs().le(eps_abs) | ((high - up_limit).abs() / abs(up_limit) <= eps_rel) | (high >= up_limit)
+    limit_close = (close - up_limit).abs().le(eps_abs) | ((close - up_limit).abs() / abs(up_limit) <= eps_rel) | (close >= up_limit)
+
+    hit_positions = [i for i, v in enumerate(limit_hit.fillna(False).tolist()) if v]
+    row["minute_rows"] = int(len(work))
+    row["has_minute_data"] = 1
+    if not hit_positions:
+        row["late_volume_ratio"] = 0.0
+        row["late_price_weakness"] = ""
+        row["intraday_risk_score"] = 80.0
+        row["intraday_tag"] = "no_limit_touch"
+        return row
+
+    first_i = hit_positions[0]
+    last_i = hit_positions[-1]
+    first_time = work.iloc[first_i]["_dt"]
+    last_time = work.iloc[last_i]["_dt"]
+    row["first_limit_time"] = first_time.strftime("%H:%M:%S")
+    row["last_limit_time"] = last_time.strftime("%H:%M:%S")
+
+    touch_states = limit_hit.fillna(False).tolist()
+    limit_touch_count = 0
+    prev_touch = False
+    for cur in touch_states:
+        if cur and not prev_touch:
+            limit_touch_count += 1
+        prev_touch = cur
+
+    states = limit_close.fillna(False).tolist()
+    open_board_count = 0
+    reseal_durations: List[float] = []
+    open_start: Optional[pd.Timestamp] = None
+    prev = False
+    seen_limit = False
+    for i, cur in enumerate(states):
+        ts = work.iloc[i]["_dt"]
+        if cur and not prev:
+            if seen_limit and open_start is not None:
+                reseal_durations.append(max(0.0, (ts - open_start).total_seconds() / 60.0))
+                open_start = None
+            seen_limit = True
+        if seen_limit and prev and not cur:
+            open_board_count += 1
+            open_start = ts
+        prev = cur
+
+    after_first_low = low.iloc[first_i:]
+    max_drawdown_after_limit = 0.0
+    if after_first_low.notna().any():
+        max_drawdown_after_limit = max(0.0, (up_limit - float(after_first_low.min())) / up_limit * 100.0)
+
+    late_mask = work["_dt"].dt.strftime("%H:%M:%S") >= "14:30:00"
+    late = work[late_mask].copy()
+    total_vol = float(vol.fillna(0).sum())
+    late_vol = float(_to_num(late["vol"]).fillna(0).sum()) if (not late.empty and "vol" in late.columns) else 0.0
+    late_volume_ratio = late_vol / total_vol if total_vol > 0 else 0.0
+    late_last_close = float(_to_num(late["close"]).dropna().iloc[-1]) if (not late.empty and "close" in late.columns and not _to_num(late["close"]).dropna().empty) else float(close.dropna().iloc[-1])
+    late_price_weakness = max(0.0, (up_limit - late_last_close) / up_limit * 100.0)
+    late_close = limit_close[late_mask]
+    late_limit_hold_minutes = int(late_close.fillna(False).sum())
+    late_open_events = 0
+    prev_late = True
+    for cur in late_close.fillna(False).tolist():
+        if prev_late and not cur:
+            late_open_events += 1
+        prev_late = cur
+
+    reseal_count = len(reseal_durations)
+    reseal_avg = sum(reseal_durations) / reseal_count if reseal_count else None
+    reseal_speed = _score_reseal_speed(reseal_avg, reseal_count)
+    reseal_acceptance = _clip_score(100 - open_board_count * 12 - max_drawdown_after_limit * 6 - (100 - reseal_speed) * 0.35)
+
+    late_withdraw = _clip_score(late_price_weakness * 15 + max(0.0, late_volume_ratio - 0.18) * 180 + late_open_events * 12)
+    if late_limit_hold_minutes == 0:
+        late_withdraw = max(late_withdraw, 70.0)
+
+    first_minutes = first_time.hour * 60 + first_time.minute
+    early_bonus = 25 if first_minutes <= 10 * 60 else 12 if first_minutes <= 11 * 60 else 0
+    late_penalty = 25 if first_minutes >= 14 * 60 + 30 else 0
+    path_score = _clip_score(65 + early_bonus - open_board_count * 10 - (100 - reseal_speed) * 0.2 - late_penalty - late_withdraw * 0.25)
+    quality_score = _clip_score(path_score * 0.45 + reseal_acceptance * 0.3 + (100 - late_withdraw) * 0.25)
+
+    open_board_risk = _clip_score(open_board_count * 22)
+    reseal_slow_risk = _clip_score(100 - reseal_speed if open_board_count else 15)
+    path_weakness_risk = _clip_score(100 - path_score)
+    intraday_risk = _clip_score(
+        0.35 * open_board_risk
+        + 0.25 * reseal_slow_risk
+        + 0.25 * late_withdraw
+        + 0.15 * path_weakness_risk
+    )
+
+    if late_withdraw >= 65:
+        tag = "late_withdraw_risk"
+    elif open_board_count >= 3:
+        tag = "high_open_board_risk"
+    elif quality_score >= 75 and intraday_risk <= 35:
+        tag = "healthy_limitup"
+    elif quality_score >= 55:
+        tag = "neutral_limitup"
+    else:
+        tag = "weak_limitup"
+
+    row.update(
+        {
+            "limit_touch_count": int(limit_touch_count),
+            "open_board_count": int(open_board_count),
+            "max_drawdown_after_limit": round(max_drawdown_after_limit, 4),
+            "reseal_count": int(reseal_count),
+            "reseal_minutes_avg": round(reseal_avg, 4) if reseal_avg is not None else "",
+            "reseal_speed_score": round(reseal_speed, 4),
+            "reseal_acceptance_score": round(reseal_acceptance, 4),
+            "late_volume_ratio": round(late_volume_ratio, 6),
+            "late_price_weakness": round(late_price_weakness, 4),
+            "late_limit_hold_minutes": int(late_limit_hold_minutes),
+            "late_withdraw_score": round(late_withdraw, 4),
+            "limitup_path_score": round(path_score, 4),
+            "limitup_quality_score": round(quality_score, 4),
+            "intraday_risk_score": round(intraday_risk, 4),
+            "intraday_tag": tag,
+        }
+    )
+    return row
+
+
+def build_intraday_features(
+    minute_frames: Dict[str, pd.DataFrame],
+    limit_price_map: Dict[str, float],
+    trade_date: str,
+    minute_freq: str,
+    symbols: Optional[List[str]] = None,
+) -> pd.DataFrame:
+    codes = symbols or sorted(set(minute_frames.keys()) | set(limit_price_map.keys()))
+    rows = [
+        _build_one_intraday_feature(
+            ts_code=code,
+            df=minute_frames.get(code, pd.DataFrame()),
+            up_limit=limit_price_map.get(code),
+            trade_date=trade_date,
+            minute_freq=minute_freq,
+        )
+        for code in codes
+    ]
+    return pd.DataFrame(rows, columns=_intraday_feature_columns())
+
+
+def run_intraday_upgrade(
+    pro,
+    trade_date: str,
+    base_raw: Path,
+    base_latest: Path,
+    dfs: Dict[str, pd.DataFrame],
+    meta: Dict[str, Any],
+) -> None:
+    enable_auction = _env_bool("ENABLE_AUCTION", "1")
+    enable_minute = _env_bool("ENABLE_MINUTE", "1")
+    minute_freq = os.getenv("MINUTE_FREQ", "1min").strip() or "1min"
+    max_symbols = max(0, _env_int("MAX_MINUTE_SYMBOLS", 80))
+
+    symbols = build_intraday_universe(base_raw)[:max_symbols]
+    limit_map = _limit_price_map(dfs.get("stk_limit", pd.DataFrame()))
+
+    meta["auction"] = {"enabled": enable_auction, "ok": False, "rows": 0, "columns": [], "error": ""}
+    meta["minute"] = {
+        "enabled": enable_minute,
+        "ok": False,
+        "freq": minute_freq,
+        "symbols_requested": int(len(symbols)) if enable_minute else 0,
+        "symbols_success": 0,
+        "symbols_failed": 0,
+        "errors": [],
+    }
+    meta["intraday_features"] = {"ok": False, "rows": 0, "columns": [], "error": ""}
+
+    if enable_auction:
+        try:
+            auction_df, auction_info = fetch_auction(pro, trade_date, symbols=symbols)
+            save_df(auction_df, base_raw / "stk_auction.csv", columns=list(auction_df.columns) or _auction_columns())
+            save_df(auction_df, base_latest / "stk_auction.csv", columns=list(auction_df.columns) or _auction_columns())
+            meta["auction"].update(
+                {
+                    "ok": bool(auction_info.get("ok", False)),
+                    "rows": int(len(auction_df)),
+                    "columns": [str(c) for c in auction_df.columns],
+                    "error": auction_info.get("error", ""),
+                }
+            )
+            if auction_info.get("fallback_symbol_errors"):
+                meta["auction"]["fallback_symbol_errors"] = auction_info["fallback_symbol_errors"]
+        except Exception as e:
+            meta["auction"]["error"] = repr(e)
+            save_df(pd.DataFrame(), base_raw / "stk_auction.csv", columns=_auction_columns())
+            save_df(pd.DataFrame(), base_latest / "stk_auction.csv", columns=_auction_columns())
+            print(f"[AUCTION-FAILED] err={repr(e)}")
+            print(traceback.format_exc())
+    else:
+        save_df(pd.DataFrame(), base_raw / "stk_auction.csv", columns=_auction_columns())
+        save_df(pd.DataFrame(), base_latest / "stk_auction.csv", columns=_auction_columns())
+
+    minute_frames: Dict[str, pd.DataFrame] = {}
+    raw_minute_dir = base_raw / "minute" / minute_freq
+    latest_minute_dir = base_latest / "minute" / minute_freq
+    ensure_dir(raw_minute_dir)
+    _clear_csv_dir(latest_minute_dir)
+
+    if enable_minute and symbols:
+        for ts_code in symbols:
+            try:
+                df, info = fetch_minute_for_symbol(pro, ts_code, trade_date, minute_freq)
+                minute_frames[ts_code] = df
+                save_df(df, raw_minute_dir / f"{ts_code}.csv", columns=list(df.columns) or _minute_columns())
+                save_df(df, latest_minute_dir / f"{ts_code}.csv", columns=list(df.columns) or _minute_columns())
+                if info.get("ok") and not df.empty:
+                    meta["minute"]["symbols_success"] += 1
+                else:
+                    meta["minute"]["symbols_failed"] += 1
+                    if info.get("error"):
+                        meta["minute"]["errors"].append({"ts_code": ts_code, "error": info["error"]})
+            except Exception as e:
+                minute_frames[ts_code] = pd.DataFrame(columns=_minute_columns())
+                meta["minute"]["symbols_failed"] += 1
+                meta["minute"]["errors"].append({"ts_code": ts_code, "error": repr(e)})
+                save_df(minute_frames[ts_code], raw_minute_dir / f"{ts_code}.csv", columns=_minute_columns())
+                save_df(minute_frames[ts_code], latest_minute_dir / f"{ts_code}.csv", columns=_minute_columns())
+                print(f"[MINUTE-FAILED] ts_code={ts_code} err={repr(e)}")
+        meta["minute"]["errors"] = meta["minute"]["errors"][:30]
+        meta["minute"]["ok"] = True
+    else:
+        meta["minute"]["ok"] = True
+
+    try:
+        features = build_intraday_features(
+            minute_frames=minute_frames,
+            limit_price_map=limit_map,
+            trade_date=trade_date,
+            minute_freq=minute_freq,
+            symbols=symbols,
+        )
+        save_df(features, base_raw / "intraday_features.csv", columns=_intraday_feature_columns())
+        save_df(features, base_latest / "intraday_features.csv", columns=_intraday_feature_columns())
+        meta["intraday_features"].update(
+            {
+                "ok": True,
+                "rows": int(len(features)),
+                "columns": [str(c) for c in features.columns],
+                "error": "",
+            }
+        )
+    except Exception as e:
+        meta["intraday_features"]["error"] = repr(e)
+        save_df(pd.DataFrame(), base_raw / "intraday_features.csv", columns=_intraday_feature_columns())
+        save_df(pd.DataFrame(), base_latest / "intraday_features.csv", columns=_intraday_feature_columns())
+        print(f"[INTRADAY-FEATURES-FAILED] err={repr(e)}")
+        print(traceback.format_exc())
+
+
 def main():
     requested_trade_date = os.getenv("TRADE_DATE", "").strip()
 
@@ -808,6 +1334,26 @@ def main():
         safe_json_dump(meta, base_raw / "_meta.json")
         safe_json_dump(meta, base_latest / "_meta.json")
         print(f"[DERIVED-FAILED] hot_board_tags err={repr(e)}")
+        print(traceback.format_exc())
+
+    try:
+        run_intraday_upgrade(
+            pro=pro,
+            trade_date=trade_date,
+            base_raw=base_raw,
+            base_latest=base_latest,
+            dfs=dfs,
+            meta=meta,
+        )
+        safe_json_dump(meta, base_raw / "_meta.json")
+        safe_json_dump(meta, base_latest / "_meta.json")
+    except Exception as e:
+        meta["auction"] = meta.get("auction", {"enabled": _env_bool("ENABLE_AUCTION", "1")})
+        meta["minute"] = meta.get("minute", {"enabled": _env_bool("ENABLE_MINUTE", "1")})
+        meta["intraday_features"] = {"ok": False, "rows": 0, "columns": [], "error": repr(e)}
+        safe_json_dump(meta, base_raw / "_meta.json")
+        safe_json_dump(meta, base_latest / "_meta.json")
+        print(f"[INTRADAY-UPGRADE-FAILED] err={repr(e)}")
         print(traceback.format_exc())
 
     if any_required_failed:
