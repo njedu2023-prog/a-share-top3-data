@@ -59,6 +59,10 @@ jobs:
         env:
           TUSHARE_TOKEN: ${{ secrets.TUSHARE_TOKEN }}
           ENABLE_DRAGON_TIGER: "0"
+          ENABLE_AUCTION: "1"
+          ENABLE_MINUTE: "1"
+          MINUTE_FREQ: "1min"
+          MAX_MINUTE_SYMBOLS: "80"
           TRADE_DATE: ${{ inputs.trade_date || '' }}
         run: |
           set -e
