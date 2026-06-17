@@ -1,7 +1,7 @@
 {
-  "requested_trade_date": null,
+  "requested_trade_date": "20260616",
   "resolved_trade_date": "20260616",
-  "generated_at_bj": "2026-06-16 23:07:37",
+  "generated_at_bj": "2026-06-17 14:26:33",
   "jobs": [
     {
       "key": "limit_list_d",
@@ -93,7 +93,7 @@
         "fields": "ts_code,name,start_date,end_date,change_reason"
       },
       "status": "ok",
-      "rows": 56,
+      "rows": 57,
       "error": null
     },
     {
@@ -156,5 +156,56 @@
       "hot_boards": 10,
       "tagged": 119
     }
+  },
+  "auction": {
+    "enabled": true,
+    "ok": true,
+    "rows": 5507,
+    "columns": [
+      "ts_code",
+      "trade_date",
+      "vol",
+      "price",
+      "amount"
+    ],
+    "error": ""
+  },
+  "minute": {
+    "enabled": true,
+    "ok": true,
+    "freq": "1min",
+    "symbols_requested": 80,
+    "symbols_success": 80,
+    "symbols_failed": 0,
+    "errors": []
+  },
+  "intraday_features": {
+    "ok": true,
+    "rows": 80,
+    "columns": [
+      "ts_code",
+      "trade_date",
+      "minute_freq",
+      "minute_rows",
+      "has_minute_data",
+      "first_limit_time",
+      "last_limit_time",
+      "limit_touch_count",
+      "open_board_count",
+      "max_drawdown_after_limit",
+      "reseal_count",
+      "reseal_minutes_avg",
+      "reseal_speed_score",
+      "reseal_acceptance_score",
+      "late_volume_ratio",
+      "late_price_weakness",
+      "late_limit_hold_minutes",
+      "late_withdraw_score",
+      "limitup_path_score",
+      "limitup_quality_score",
+      "intraday_risk_score",
+      "intraday_tag"
+    ],
+    "error": ""
   }
 }
