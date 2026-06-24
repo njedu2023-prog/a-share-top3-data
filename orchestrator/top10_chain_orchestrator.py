@@ -272,14 +272,43 @@ def wait_run(repo: str, workflow: str, token: str, run: Dict[str, Any], label: s
 
 
 def wait_pages(repo: str, token: str, since: dt.datetime, label: str, timeout_s: int = 900) -> None:
+    """Wait for the latest Pages deployment after `since`.
+
+    GitHub cancels an older Pages deployment when a newer deployment is queued.
+    That is a normal supersession, not a chain failure, so this function keeps
+    following the newest Pages run instead of binding to the first one observed.
+    """
     deadline = time.time() + timeout_s
+    last_state = ""
+    last_cancelled: Optional[Dict[str, Any]] = None
     while time.time() < deadline:
         runs = gh(f"/repos/{repo}/actions/runs?per_page=30", token).get("workflow_runs", [])
-        for run in runs:
-            if run.get("name") == "pages build and deployment" and parse_time(run["created_at"]) >= since:
-                wait_run(repo, "pages-build-deployment", token, run, label, timeout_s)
+        candidates = [
+            run for run in runs
+            if run.get("name") == "pages build and deployment" and parse_time(run["created_at"]) >= since
+        ]
+        candidates.sort(key=lambda run: parse_time(run["created_at"]), reverse=True)
+        if not candidates:
+            time.sleep(10)
+            continue
+        run = candidates[0]
+        state = f"#{run.get('run_number')} {run.get('status')}/{run.get('conclusion')} {run.get('html_url')}"
+        if state != last_state:
+            log(f"[{label}] {state}")
+            last_state = state
+        if run.get("status") == "completed":
+            conclusion = run.get("conclusion")
+            if conclusion == "success":
                 return
+            if conclusion == "cancelled":
+                last_cancelled = run
+                time.sleep(10)
+                continue
+            raise ChainError(f"{label} failed: {conclusion} {run.get('html_url')}")
         time.sleep(10)
+    if last_cancelled:
+        log(f"[{label}] latest observed Pages run was cancelled; direct URL checks will decide {last_cancelled.get('html_url')}")
+        return
     log(f"[{label}] no Pages run observed; direct URL checks will decide")
 
 
