@@ -1,0 +1,70 @@
+name: Orchestrate A-share Top10 Chain
+
+on:
+  schedule:
+    # Mon-Fri 19:10 Beijing (UTC+8) == 11:10 UTC.
+    - cron: "10 11 * * 1-5"
+
+  workflow_dispatch:
+    inputs:
+      trade_date:
+        description: "指定交易日 YYYYMMDD（留空=北京时间当天）"
+        required: false
+        default: ""
+        type: string
+      skip_calendar:
+        description: "跳过 A 股交易日历检查，强制执行"
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: a-share-top10-chain-orchestrator
+  cancel-in-progress: false
+
+jobs:
+  orchestrate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    env:
+      TZ: Asia/Shanghai
+      PYTHONUTF8: "1"
+      ORCHESTRATOR_TOKEN: ${{ secrets.ORCHESTRATOR_TOKEN }}
+      TUSHARE_TOKEN: ${{ secrets.TUSHARE_TOKEN }}
+
+    steps:
+      - name: Checkout orchestrator repo
+        uses: actions/checkout@v5
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Check required token
+        run: |
+          set -euo pipefail
+          if [ -z "${ORCHESTRATOR_TOKEN:-}" ]; then
+            echo "ERROR: missing secret ORCHESTRATOR_TOKEN."
+            echo "It must have access to trigger/read Actions in:"
+            echo "- njedu2023-prog/a-share-top3-data"
+            echo "- njedu2023-prog/a-top10"
+            echo "- njedu2023-prog/top10-decision"
+            exit 1
+          fi
+
+      - name: Run chain orchestrator
+        run: |
+          set -euo pipefail
+          args=()
+          if [ -n "${{ github.event.inputs.trade_date || '' }}" ]; then
+            args+=(--trade-date "${{ github.event.inputs.trade_date }}")
+          fi
+          if [ "${{ github.event.inputs.skip_calendar || false }}" = "true" ]; then
+            args+=(--skip-calendar)
+          fi
+          python orchestrator/top10_chain_orchestrator.py "${args[@]}"
