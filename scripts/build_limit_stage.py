@@ -20,7 +20,7 @@ def stage_text(v: object) -> str:
         n = int(float(v))
     except Exception:
         return ""
-    return f"{n}进{n + 1}" if n > 0 else ""
+    return f"{n}→{n + 1}" if n > 0 else ""
 
 
 def quality_weight(v: object) -> float:
