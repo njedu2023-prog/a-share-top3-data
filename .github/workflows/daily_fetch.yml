@@ -72,6 +72,14 @@ jobs:
           set -e
           python scripts/fetch_daily_snapshots.py
 
+      - name: Build limit stage snapshot
+        env:
+          TUSHARE_TOKEN: ${{ secrets.TUSHARE_TOKEN }}
+          TRADE_DATE: ${{ inputs.trade_date || '' }}
+        run: |
+          set -e
+          python scripts/build_limit_stage.py
+
       - name: Commit and push data
         run: |
           set -e
