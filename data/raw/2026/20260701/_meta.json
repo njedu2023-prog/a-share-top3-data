@@ -1,16 +1,16 @@
 {
   "requested_trade_date": "20260701",
   "resolved_trade_date": "20260701",
-  "generated_at_bj": "2026-07-01 21:39:29",
+  "generated_at_bj": "2026-07-02 14:23:32",
   "jobs": [
     {
       "key": "limit_list_d",
-      "note": "涨停池（日）（会在后处理中强制推导为“收盘真实涨停”并回填 up_limit/down_limit/limit_type）",
+      "note": "涨停池（日）（优先拉取 Tushare limit_times/up_stat；后处理中仍强制保留收盘真实涨停池口径）",
       "allow_empty": true,
       "required": false,
       "kwargs": {
         "trade_date": "20260701",
-        "fields": "trade_date,ts_code,name,limit_type,close,up_limit,down_limit,open_times,fd_amount,first_time,last_time"
+        "fields": "trade_date,ts_code,name,limit_type,close,up_limit,down_limit,open_times,fd_amount,first_time,last_time,limit_times,up_stat,industry,turnover_ratio,amount,float_mv,total_mv"
       },
       "status": "ok",
       "rows": 232,
@@ -79,7 +79,7 @@
         "fields": "ts_code,symbol,name,area,industry,market,list_date"
       },
       "status": "ok",
-      "rows": 5532,
+      "rows": 5534,
       "error": null
     },
     {
@@ -93,7 +93,7 @@
         "fields": "ts_code,name,start_date,end_date,change_reason"
       },
       "status": "ok",
-      "rows": 55,
+      "rows": 56,
       "error": null
     },
     {
@@ -129,7 +129,9 @@
         "has_seal_amount": 1,
         "has_limit_type": 0,
         "has_up_limit": 0,
-        "has_down_limit": 0
+        "has_down_limit": 0,
+        "has_limit_times": 1,
+        "has_up_stat": 1
       },
       "limit_break_d": {
         "has_open_times": 1,
@@ -137,7 +139,9 @@
         "has_seal_amount": 1,
         "has_limit_type": 0,
         "has_up_limit": 0,
-        "has_down_limit": 0
+        "has_down_limit": 0,
+        "has_limit_times": 0,
+        "has_up_stat": 0
       }
     },
     "limit_list_d_policy": {
@@ -151,11 +155,30 @@
       "filled_down_limit": 232,
       "warn": ""
     },
+    "limit_stage": {
+      "source": "limit_list_d.limit_times",
+      "limit_list_rows": 155,
+      "limit_step_rows": 40,
+      "rows": 155,
+      "limit_times_nonnull": 152,
+      "missing_reason": ""
+    },
     "hot_board_tags": {
       "hot_board_topn": 10,
       "hot_boards": 10,
       "tagged": 155
     }
+  },
+  "limit_step": {
+    "ok": true,
+    "api_name": "limit_step",
+    "rows": 40,
+    "columns": [
+      "trade_date",
+      "ts_code",
+      "name"
+    ],
+    "error": ""
   },
   "auction": {
     "enabled": true,
