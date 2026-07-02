@@ -178,6 +178,22 @@ def _auction_columns() -> List[str]:
     return ["ts_code", "trade_date", "vol", "price", "amount"]
 
 
+def _limit_stage_columns() -> List[str]:
+    return [
+        "trade_date",
+        "ts_code",
+        "name",
+        "limit_times",
+        "advance_stage",
+        "晋阶",
+        "stage_quality_weight",
+        "stage_risk_weight",
+        "stage_prior",
+        "stage_source",
+        "up_stat",
+    ]
+
+
 def _minute_columns() -> List[str]:
     return ["ts_code", "trade_time", "open", "high", "low", "close", "vol", "amount"]
 
@@ -318,20 +334,35 @@ def build_jobs(pro, trade_date: str) -> List[FetchJob]:
 
     schema_min_code_date = ["ts_code", "trade_date"]
 
-    # 1) limit_list_d（注意：该接口在不同权限下可能不给 up_limit/limit_type，这里先抓原始表，后面用 daily+stk_limit 推导“收盘真实涨停池”）
-    limit_list_fields = (
+    # 1) limit_list_d（优先请求 Tushare 原生连板字段；字段不兼容时自动回退基础字段）
+    limit_list_base_fields = (
         "trade_date,ts_code,name,limit_type,close,up_limit,down_limit,"
         "open_times,fd_amount,first_time,last_time"
     )
+    limit_list_fields = (
+        limit_list_base_fields
+        + ",limit_times,up_stat,industry,turnover_ratio,amount,float_mv,total_mv"
+    )
+
+    def _limit_list_d_with_field_fallback(**kwargs):
+        try:
+            return pro.limit_list_d(**kwargs)
+        except Exception as e:
+            fallback_kwargs = dict(kwargs)
+            fallback_kwargs["fields"] = limit_list_base_fields
+            print(f"[LIMIT_LIST_D-FIELD-FALLBACK] extended fields failed: {repr(e)}")
+            return pro.limit_list_d(**fallback_kwargs)
+
+    _limit_list_d_with_field_fallback.__name__ = "limit_list_d_with_field_fallback"
     jobs.append(
         FetchJob(
             key="limit_list_d",
-            fn=pro.limit_list_d,
+            fn=_limit_list_d_with_field_fallback,
             kwargs={"trade_date": trade_date, "fields": limit_list_fields},
             columns=_fields_to_columns(limit_list_fields) or schema_min_code_date,
             allow_empty=True,
             required=False,
-            note="涨停池（日）（会在后处理中强制推导为“收盘真实涨停”并回填 up_limit/down_limit/limit_type）",
+            note="涨停池（日）（优先拉取 Tushare limit_times/up_stat；后处理中仍强制保留收盘真实涨停池口径）",
         )
     )
 
@@ -600,6 +631,8 @@ def _postprocess_limit_tables(df: pd.DataFrame, key: str, meta: Dict[str, Any]) 
             "has_limit_type": int("limit_type" in df.columns),
             "has_up_limit": int("up_limit" in df.columns),
             "has_down_limit": int("down_limit" in df.columns),
+            "has_limit_times": int("limit_times" in df.columns),
+            "has_up_stat": int("up_stat" in df.columns),
         }
 
     return df
@@ -769,6 +802,166 @@ def safe_query(pro, api_name: str, *, fields: str = "", **params) -> Tuple[pd.Da
         info["error"] = repr(e)
         print(f"[SAFE-QUERY-FAILED] {api_name} params={params} err={repr(e)}")
         return pd.DataFrame(), info
+
+
+def fetch_limit_step_optional(pro, trade_date: str) -> Tuple[pd.DataFrame, Dict[str, Any]]:
+    """
+    Tushare 原生连板/天梯源。
+
+    只做可选增强：接口或字段不可用时返回空表，不影响主数据链路。
+    """
+    fields = "trade_date,ts_code,name,limit_times,up_stat"
+    df, info = safe_query(pro, "limit_step", fields=fields, trade_date=trade_date)
+    if info.get("ok"):
+        return df, info
+
+    fallback, fallback_info = safe_query(pro, "limit_step", trade_date=trade_date)
+    fallback_info["fallback_from_fields"] = info
+    return fallback, fallback_info
+
+
+def _stage_text_from_limit_times(v: Any) -> str:
+    try:
+        n = int(float(str(v).strip()))
+    except Exception:
+        return ""
+    if n <= 0:
+        return ""
+    return f"{n}进{n + 1}"
+
+
+def _stage_prior_from_limit_times(v: Any) -> float:
+    try:
+        n = int(float(str(v).strip()))
+    except Exception:
+        return float("nan")
+    priors = {
+        1: 0.16,
+        2: 0.35,
+        3: 0.43,
+        4: 0.515,
+        5: 0.535,
+        6: 0.44,
+    }
+    return float(priors.get(n, 0.35 if n >= 7 else float("nan")))
+
+
+def _stage_quality_weight_from_limit_times(v: Any) -> float:
+    try:
+        n = int(float(str(v).strip()))
+    except Exception:
+        return 1.0
+    # 用户交易口径：3进4、4进5 是晋阶质量顶点，两边自然滑落。
+    weights = {
+        1: 0.78,
+        2: 0.92,
+        3: 1.10,
+        4: 1.10,
+        5: 1.00,
+        6: 0.88,
+    }
+    return float(weights.get(n, 0.72 if n >= 7 else 1.0))
+
+
+def _stage_risk_weight_from_limit_times(v: Any) -> float:
+    try:
+        n = int(float(str(v).strip()))
+    except Exception:
+        return 0.0
+    risks = {
+        1: 0.035,
+        2: 0.015,
+        3: 0.000,
+        4: 0.005,
+        5: 0.045,
+        6: 0.095,
+    }
+    return float(risks.get(n, 0.160 if n >= 7 else 0.0))
+
+
+def derive_limit_stage(
+    trade_date: str,
+    limit_list_df: pd.DataFrame,
+    limit_step_df: pd.DataFrame,
+    meta: Dict[str, Any],
+) -> Tuple[pd.DataFrame, Dict[str, Any]]:
+    """
+    生成晋阶因子。
+
+    主原则：limit_times 必须来自 Tushare 原生字段，不用 daily/stk_limit 自行推导。
+    """
+    meta.setdefault("derived", {})
+    info: Dict[str, Any] = {
+        "source": "",
+        "limit_list_rows": int(len(limit_list_df)) if isinstance(limit_list_df, pd.DataFrame) else 0,
+        "limit_step_rows": int(len(limit_step_df)) if isinstance(limit_step_df, pd.DataFrame) else 0,
+        "rows": 0,
+        "limit_times_nonnull": 0,
+        "missing_reason": "",
+    }
+
+    if limit_list_df is None:
+        limit_list_df = pd.DataFrame()
+    if limit_step_df is None:
+        limit_step_df = pd.DataFrame()
+
+    base_cols = ["trade_date", "ts_code", "name", "limit_times", "up_stat"]
+    if limit_list_df.empty or "ts_code" not in limit_list_df.columns:
+        info["missing_reason"] = "limit_list_d_empty_or_missing_ts_code"
+        out = pd.DataFrame(columns=_limit_stage_columns())
+        meta["derived"]["limit_stage"] = info
+        return out, info
+
+    out = pd.DataFrame()
+    out["trade_date"] = (
+        limit_list_df["trade_date"].astype(str) if "trade_date" in limit_list_df.columns else pd.Series([trade_date] * len(limit_list_df))
+    )
+    out["ts_code"] = limit_list_df["ts_code"].map(_norm_ts_code)
+    out["name"] = limit_list_df["name"].astype(str) if "name" in limit_list_df.columns else ""
+
+    source = "missing"
+    if "limit_times" in limit_list_df.columns and limit_list_df["limit_times"].notna().any():
+        out["limit_times"] = limit_list_df["limit_times"]
+        out["up_stat"] = limit_list_df["up_stat"] if "up_stat" in limit_list_df.columns else pd.NA
+        source = "limit_list_d.limit_times"
+    elif (not limit_step_df.empty) and "ts_code" in limit_step_df.columns and "limit_times" in limit_step_df.columns:
+        step = limit_step_df.copy()
+        step["ts_code"] = step["ts_code"].map(_norm_ts_code)
+        keep = ["ts_code", "limit_times"]
+        if "up_stat" in step.columns:
+            keep.append("up_stat")
+        if "name" in step.columns:
+            keep.append("name")
+        step = step[keep].drop_duplicates(subset=["ts_code"], keep="first")
+        out = out.merge(step, on="ts_code", how="left", suffixes=("", "_step"))
+        if "name_step" in out.columns:
+            name_blank = out["name"].astype(str).str.strip().eq("")
+            out.loc[name_blank, "name"] = out.loc[name_blank, "name_step"]
+            out = out.drop(columns=["name_step"], errors="ignore")
+        if "up_stat" not in out.columns:
+            out["up_stat"] = pd.NA
+        source = "limit_step.limit_times"
+    else:
+        out["limit_times"] = pd.NA
+        out["up_stat"] = limit_list_df["up_stat"] if "up_stat" in limit_list_df.columns else pd.NA
+        info["missing_reason"] = "tushare_limit_times_missing"
+
+    out["advance_stage"] = out["limit_times"].map(_stage_text_from_limit_times)
+    out["晋阶"] = out["advance_stage"]
+    out["stage_quality_weight"] = out["limit_times"].map(_stage_quality_weight_from_limit_times)
+    out["stage_risk_weight"] = out["limit_times"].map(_stage_risk_weight_from_limit_times)
+    out["stage_prior"] = out["limit_times"].map(_stage_prior_from_limit_times)
+    out["stage_source"] = source
+
+    info["source"] = source
+    info["rows"] = int(len(out))
+    info["limit_times_nonnull"] = int(pd.to_numeric(out.get("limit_times"), errors="coerce").notna().sum()) if len(out) else 0
+    if info["limit_times_nonnull"] <= 0 and not info["missing_reason"]:
+        info["missing_reason"] = "limit_times_all_empty"
+
+    meta["derived"]["limit_stage"] = info
+    cols = _limit_stage_columns()
+    return out.reindex(columns=cols, fill_value=""), info
 
 
 def _read_symbol_priority(path: Path) -> List[str]:
@@ -1319,6 +1512,38 @@ def main():
         meta.setdefault("derived", {})
         meta["derived"]["limit_list_d_policy"] = {"status": "failed", "error": repr(e)}
         print(f"[LIMIT_LIST_ENFORCED-FAILED] err={repr(e)}")
+        print(traceback.format_exc())
+
+    try:
+        limit_step_df, limit_step_info = fetch_limit_step_optional(pro, trade_date)
+        meta["limit_step"] = limit_step_info
+        limit_step_cols = list(limit_step_df.columns) if not limit_step_df.empty else ["trade_date", "ts_code", "name", "limit_times", "up_stat"]
+        save_df(limit_step_df, base_raw / "limit_step.csv", columns=limit_step_cols)
+        save_df(limit_step_df, base_latest / "limit_step.csv", columns=limit_step_cols)
+        dfs["limit_step"] = limit_step_df
+
+        limit_stage_df, limit_stage_info = derive_limit_stage(
+            trade_date=trade_date,
+            limit_list_df=dfs.get("limit_list_d", pd.DataFrame()),
+            limit_step_df=limit_step_df,
+            meta=meta,
+        )
+        save_df(limit_stage_df, base_raw / "limit_stage.csv", columns=_limit_stage_columns())
+        save_df(limit_stage_df, base_latest / "limit_stage.csv", columns=_limit_stage_columns())
+        dfs["limit_stage"] = limit_stage_df
+        print(
+            f"[LIMIT_STAGE] trade_date={trade_date} rows={len(limit_stage_df)} "
+            f"source={limit_stage_info.get('source')} nonnull={limit_stage_info.get('limit_times_nonnull')}"
+        )
+    except Exception as e:
+        meta.setdefault("derived", {})
+        meta["derived"]["limit_stage"] = {"status": "failed", "error": repr(e)}
+        try:
+            save_df(pd.DataFrame(), base_raw / "limit_stage.csv", columns=_limit_stage_columns())
+            save_df(pd.DataFrame(), base_latest / "limit_stage.csv", columns=_limit_stage_columns())
+        except Exception:
+            pass
+        print(f"[LIMIT_STAGE-FAILED] err={repr(e)}")
         print(traceback.format_exc())
 
     safe_json_dump(meta, base_raw / "_meta.json")
