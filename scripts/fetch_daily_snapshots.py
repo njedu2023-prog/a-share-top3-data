@@ -827,7 +827,7 @@ def _stage_text_from_limit_times(v: Any) -> str:
         return ""
     if n <= 0:
         return ""
-    return f"{n}进{n + 1}"
+    return f"{n}→{n + 1}"
 
 
 def _stage_prior_from_limit_times(v: Any) -> float:
@@ -851,7 +851,7 @@ def _stage_quality_weight_from_limit_times(v: Any) -> float:
         n = int(float(str(v).strip()))
     except Exception:
         return 1.0
-    # 用户交易口径：3进4、4进5 是晋阶质量顶点，两边自然滑落。
+    # 用户交易口径：3→4、4→5 是晋阶质量顶点，两边自然滑落。
     weights = {
         1: 0.78,
         2: 0.92,
