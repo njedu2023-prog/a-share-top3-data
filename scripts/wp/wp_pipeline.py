@@ -158,7 +158,7 @@ def build_from_latest_data() -> pd.DataFrame:
     out["today_limitup"] = np.where(out["ts_code"].isin(current_limit_codes) | ((up_limit > 0) & (close >= up_limit * 0.999)), 1, 0)
     out["pre_day_limitup"] = np.where(out["ts_code"].isin(prev_limit_codes), 1, 0)
 
-    sector_gt6 = out.assign(_gt6=pct_chg >= 6).groupby("sector_name")["_gt6"].sum()
+    sector_gt6 = out.assign(_gt6=pct_chg > 6).groupby("sector_name")["_gt6"].sum()
     sector_amount = out.groupby("sector_name")["amount"].sum()
     amount_median = float(sector_amount.median()) if len(sector_amount) else 0.0
     sector_metrics = pd.DataFrame({
@@ -220,7 +220,7 @@ def build_candidates(features: pd.DataFrame | None = None) -> pd.DataFrame:
     current = now_cn()
     df = normalize(features if features is not None else pd.read_csv(LATEST / "wp_latest_features.csv"))
     if not df.empty:
-        mask = (pd.to_numeric(df["pct_chg"], errors="coerce").fillna(0) >= 6) & (pd.to_numeric(df["pre_day_limitup"], errors="coerce").fillna(0) != 1) & (pd.to_numeric(df["today_limitup"], errors="coerce").fillna(0) != 1)
+        mask = (pd.to_numeric(df["pct_chg"], errors="coerce").fillna(0) > 6) & (pd.to_numeric(df["pre_day_limitup"], errors="coerce").fillna(0) != 1) & (pd.to_numeric(df["today_limitup"], errors="coerce").fillna(0) != 1)
         df = df.loc[mask].copy()
     write_csv(df, WP_ROOT / "candidates" / current.strftime("%Y") / current.strftime("%Y%m%d") / "wp_candidates.csv")
     write_csv(df, LATEST / "wp_latest_candidates.csv")
