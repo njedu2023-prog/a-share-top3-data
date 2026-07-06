@@ -1,1 +1,1 @@
-﻿trade_date,ts_code,name,next_trade_date,label_t1_limitup
+﻿trade_date,ts_code,name,p_limitup_t1,wp_score,next_trade_date,next_day_high,next_day_close,next_day_limitup_price,label_t1_limitup,next_day_max_pct,next_day_close_pct

@@ -5,7 +5,7 @@ import os
 from datetime import UTC, datetime
 from pathlib import Path
 from urllib.error import URLError
-from urllib.request import urlopen
+from urllib.request import Request, urlopen
 
 import numpy as np
 import pandas as pd
@@ -25,6 +25,12 @@ SCHEMA = [
     "volume_ratio", "sector_name", "sector_rank", "sector_limitup_count",
     "sector_gt6_count", "sector_amount_ratio", "pre_day_limitup", "today_limitup",
     "today_limit_up_price", "prev_limit_up_price", "ret_5d", "ret_20d",
+    "amount_ratio_5d", "amount_ratio_20d", "turnover_rate_5d_avg",
+    "close_position", "intraday_pullback_pct", "open_to_close_pct",
+    "gap_open_pct", "amplitude", "high_20d_break", "platform_break_20d",
+    "stage_high_20d", "dragon_tiger_flag", "dragon_tiger_net_rate",
+    "dragon_tiger_reason", "limit_touch_count", "open_board_count",
+    "limitup_quality_score", "intraday_risk_score",
 ]
 
 
@@ -40,6 +46,15 @@ def read_csv_source(relative_path: str) -> pd.DataFrame:
         return pd.read_csv(url, encoding="utf-8-sig")
     except (URLError, OSError, pd.errors.EmptyDataError):
         return pd.DataFrame()
+
+
+def read_json_url(url: str):
+    try:
+        req = Request(url, headers={"Accept": "application/vnd.github+json"})
+        with urlopen(req, timeout=30) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+    except (URLError, OSError, json.JSONDecodeError):
+        return None
 
 
 def now_cn() -> datetime:
@@ -118,6 +133,73 @@ def previous_limitup_codes(trade_date: str) -> set[str]:
     return set(prev["ts_code"].dropna().astype(str).str.strip())
 
 
+def available_raw_dates(trade_date: str, lookback_days: int = 45) -> list[str]:
+    start = (datetime.strptime(trade_date, "%Y%m%d") - pd.Timedelta(days=lookback_days)).strftime("%Y%m%d")
+    dates: list[str] = []
+    year_dir = RAW_ROOT / trade_date[:4]
+    if year_dir.exists():
+        dates.extend(path.name for path in year_dir.iterdir() if path.is_dir())
+    if not dates:
+        payload = read_json_url(f"https://api.github.com/repos/njedu2023-prog/a-share-top3-data/contents/data/raw/{trade_date[:4]}?ref=main")
+        if isinstance(payload, list):
+            dates.extend(item.get("name", "") for item in payload if item.get("type") == "dir")
+    return sorted(date for date in dates if start <= date <= trade_date)
+
+
+def build_history_features(out: pd.DataFrame, trade_date: str, current_daily: pd.DataFrame, daily_basic: pd.DataFrame) -> pd.DataFrame:
+    frames = []
+    for date in available_raw_dates(trade_date)[-24:]:
+        daily_path = "data/latest/daily.csv" if date == trade_date else f"data/raw/{date[:4]}/{date}/daily.csv"
+        frame = current_daily if date == trade_date else read_csv_source(daily_path)
+        if frame.empty:
+            continue
+        keep = [c for c in ["ts_code", "trade_date", "close", "high", "low", "amount", "pct_chg"] if c in frame.columns]
+        frame = frame[keep].copy()
+        frame["trade_date"] = frame.get("trade_date", date)
+        frames.append(frame)
+    if not frames:
+        return out
+
+    hist = pd.concat(frames, ignore_index=True, sort=False)
+    hist["ts_code"] = hist["ts_code"].astype(str).str.strip()
+    hist["trade_date"] = hist["trade_date"].astype(str).str.replace("-", "", regex=False)
+    for col in ["close", "high", "low", "amount", "pct_chg"]:
+        if col in hist.columns:
+            hist[col] = pd.to_numeric(hist[col], errors="coerce")
+    hist = hist.dropna(subset=["ts_code", "trade_date"]).sort_values(["ts_code", "trade_date"])
+
+    current = hist[hist["trade_date"] == trade_date].copy()
+    if current.empty:
+        return out
+    prev = hist[hist["trade_date"] < trade_date].copy()
+    grouped = prev.groupby("ts_code")
+    amount_5 = grouped["amount"].tail(5).groupby(prev.loc[grouped["amount"].tail(5).index, "ts_code"]).mean()
+    amount_20 = grouped["amount"].tail(20).groupby(prev.loc[grouped["amount"].tail(20).index, "ts_code"]).mean()
+    close_5 = grouped["close"].tail(5).groupby(prev.loc[grouped["close"].tail(5).index, "ts_code"]).first()
+    close_20 = grouped["close"].tail(20).groupby(prev.loc[grouped["close"].tail(20).index, "ts_code"]).first()
+    high_20 = grouped["high"].tail(20).groupby(prev.loc[grouped["high"].tail(20).index, "ts_code"]).max()
+    close_high_20 = grouped["close"].tail(20).groupby(prev.loc[grouped["close"].tail(20).index, "ts_code"]).max()
+    turnover_5 = pd.Series(dtype="float64")
+    if not daily_basic.empty and {"ts_code", "turnover_rate"}.issubset(daily_basic.columns):
+        turnover_5 = pd.to_numeric(daily_basic.set_index("ts_code")["turnover_rate"], errors="coerce")
+
+    current = current.set_index("ts_code")
+    current_amount = pd.to_numeric(current["amount"], errors="coerce")
+    current_close = pd.to_numeric(current["close"], errors="coerce")
+    current_high = pd.to_numeric(current["high"], errors="coerce")
+    metrics = pd.DataFrame(index=current.index)
+    metrics["amount_ratio_5d"] = current_amount / amount_5.reindex(current.index).replace(0, np.nan)
+    metrics["amount_ratio_20d"] = current_amount / amount_20.reindex(current.index).replace(0, np.nan)
+    metrics["ret_5d"] = (current_close / close_5.reindex(current.index).replace(0, np.nan) - 1) * 100
+    metrics["ret_20d"] = (current_close / close_20.reindex(current.index).replace(0, np.nan) - 1) * 100
+    metrics["stage_high_20d"] = high_20.reindex(current.index)
+    metrics["high_20d_break"] = (current_high >= metrics["stage_high_20d"].fillna(current_high) * 0.999).astype(int)
+    metrics["platform_break_20d"] = (current_close >= close_high_20.reindex(current.index).fillna(current_close) * 1.005).astype(int)
+    metrics["turnover_rate_5d_avg"] = turnover_5.reindex(current.index)
+    metrics = metrics.reset_index().rename(columns={"index": "ts_code"})
+    return out.merge(metrics, on="ts_code", how="left", suffixes=("", "_hist"))
+
+
 def build_from_latest_data() -> pd.DataFrame:
     global LAST_SOURCE_TRADE_DATE
     daily = read_csv_source("data/latest/daily.csv")
@@ -169,6 +251,11 @@ def build_from_latest_data() -> pd.DataFrame:
     out["prev_limit_up_price"] = np.nan
     out["today_limitup"] = np.where(out["ts_code"].isin(current_limit_codes) | ((up_limit > 0) & (close >= up_limit * 0.999)), 1, 0)
     out["pre_day_limitup"] = np.where(out["ts_code"].isin(prev_limit_codes), 1, 0)
+    out["close_position"] = np.where(to_num(out, "high") > to_num(out, "low"), (close - to_num(out, "low")) / (to_num(out, "high") - to_num(out, "low")) * 100, 50)
+    out["intraday_pullback_pct"] = np.where(close > 0, (to_num(out, "high") / close - 1) * 100, 0)
+    out["open_to_close_pct"] = np.where(to_num(out, "open") > 0, (close / to_num(out, "open") - 1) * 100, 0)
+    out["gap_open_pct"] = np.where(to_num(out, "pre_close") > 0, (to_num(out, "open") / to_num(out, "pre_close") - 1) * 100, 0)
+    out["amplitude"] = np.where(to_num(out, "pre_close") > 0, (to_num(out, "high") - to_num(out, "low")) / to_num(out, "pre_close") * 100, 0)
 
     sector_gt6 = out.assign(_gt6=pct_chg > 6).groupby("sector_name")["_gt6"].sum()
     sector_amount = out.groupby("sector_name")["amount"].sum()
@@ -187,15 +274,26 @@ def build_from_latest_data() -> pd.DataFrame:
     if not top_list.empty and "ts_code" in top_list.columns:
         top = top_list.copy()
         top["dragon_tiger_flag"] = 1
-        keep = [c for c in ["ts_code", "dragon_tiger_flag", "net_amount", "net_rate", "reason"] if c in top.columns]
+        top = top.rename(columns={"net_rate": "dragon_tiger_net_rate", "reason": "dragon_tiger_reason"})
+        keep = [c for c in ["ts_code", "dragon_tiger_flag", "dragon_tiger_net_rate", "dragon_tiger_reason"] if c in top.columns]
         out = out.merge(top[keep].drop_duplicates("ts_code"), on="ts_code", how="left")
+
+    out = build_history_features(out, trade_date, daily, daily_basic)
 
     out["sector_rank"] = to_num(out, "sector_rank", 99)
     out["sector_limitup_count"] = to_num(out, "sector_limitup_count", 0)
     out["sector_gt6_count"] = to_num(out, "sector_gt6_count", 0)
     out["sector_amount_ratio"] = to_num(out, "sector_amount_ratio", 1)
-    out["ret_5d"] = pct_chg
-    out["ret_20d"] = pct_chg
+    out["ret_5d"] = to_num(out, "ret_5d", 0).replace(0, np.nan).fillna(pct_chg)
+    out["ret_20d"] = to_num(out, "ret_20d", 0).replace(0, np.nan).fillna(pct_chg)
+    out["amount_ratio_5d"] = to_num(out, "amount_ratio_5d", 1).replace([np.inf, -np.inf], np.nan).fillna(to_num(out, "volume_ratio", 1))
+    out["amount_ratio_20d"] = to_num(out, "amount_ratio_20d", 1).replace([np.inf, -np.inf], np.nan).fillna(out["amount_ratio_5d"])
+    out["turnover_rate_5d_avg"] = to_num(out, "turnover_rate_5d_avg", 0)
+    out["high_20d_break"] = to_num(out, "high_20d_break", 0)
+    out["platform_break_20d"] = to_num(out, "platform_break_20d", 0)
+    out["stage_high_20d"] = to_num(out, "stage_high_20d", 0)
+    out["dragon_tiger_flag"] = to_num(out, "dragon_tiger_flag", 0)
+    out["dragon_tiger_net_rate"] = to_num(out, "dragon_tiger_net_rate", 0)
     return normalize(out)
 
 
@@ -241,7 +339,42 @@ def build_candidates(features: pd.DataFrame | None = None) -> pd.DataFrame:
 
 def build_labels() -> pd.DataFrame:
     current = now_cn()
-    labels = pd.DataFrame(columns=["trade_date", "ts_code", "name", "next_trade_date", "label_t1_limitup"])
+    columns = [
+        "trade_date", "ts_code", "name", "p_limitup_t1", "wp_score",
+        "next_trade_date", "next_day_high", "next_day_close",
+        "next_day_limitup_price", "label_t1_limitup",
+        "next_day_max_pct", "next_day_close_pct",
+    ]
+    target = target_trade_date()
+    dates = available_raw_dates(target)
+    labels = pd.DataFrame(columns=columns)
+    if len(dates) >= 2:
+        label_date = dates[-2]
+        next_date = dates[-1]
+        candidates = read_csv_source(f"data/wp/candidates/{label_date[:4]}/{label_date}/wp_candidates.csv")
+        if not candidates.empty:
+            daily_next = read_csv_source(f"data/raw/{next_date[:4]}/{next_date}/daily.csv")
+            limit_next = read_csv_source(f"data/raw/{next_date[:4]}/{next_date}/stk_limit.csv")
+            if not daily_next.empty and not limit_next.empty:
+                next_frame = daily_next[["ts_code", "high", "close"]].merge(limit_next[["ts_code", "up_limit"]], on="ts_code", how="left")
+                next_frame["ts_code"] = next_frame["ts_code"].astype(str).str.strip()
+                labels = candidates.merge(next_frame, on="ts_code", how="left")
+                price = pd.to_numeric(labels.get("price", labels.get("close", 0)), errors="coerce")
+                labels["next_trade_date"] = next_date
+                labels["next_day_high"] = pd.to_numeric(labels["high"], errors="coerce")
+                labels["next_day_close"] = pd.to_numeric(labels["close_y"] if "close_y" in labels.columns else labels["close"], errors="coerce")
+                labels["next_day_limitup_price"] = pd.to_numeric(labels["up_limit"], errors="coerce")
+                labels["label_t1_limitup"] = ((labels["next_day_limitup_price"] > 0) & (labels["next_day_high"] >= labels["next_day_limitup_price"] * 0.999)).astype(int)
+                labels["next_day_max_pct"] = np.where(price > 0, (labels["next_day_high"] / price - 1) * 100, np.nan)
+                labels["next_day_close_pct"] = np.where(price > 0, (labels["next_day_close"] / price - 1) * 100, np.nan)
+                labels["p_limitup_t1"] = labels.get("p_limitup_t1", np.nan)
+                labels["wp_score"] = labels.get("wp_score", np.nan)
+                labels["trade_date"] = label_date
+                labels = labels[[col for col in columns if col in labels.columns]]
+                for col in columns:
+                    if col not in labels.columns:
+                        labels[col] = np.nan
+                labels = labels[columns]
     write_csv(labels, WP_ROOT / "labels" / current.strftime("%Y") / current.strftime("%Y%m%d") / "wp_labels.csv")
     return labels
 

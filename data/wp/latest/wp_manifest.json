@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-07-06 16:01:42",
+  "generated_at": "2026-07-06 16:24:21",
   "status": "stale_data",
   "source_trade_date": "20260703",
   "expected_trade_date": "20260706",
@@ -31,7 +31,25 @@
     "today_limit_up_price",
     "prev_limit_up_price",
     "ret_5d",
-    "ret_20d"
+    "ret_20d",
+    "amount_ratio_5d",
+    "amount_ratio_20d",
+    "turnover_rate_5d_avg",
+    "close_position",
+    "intraday_pullback_pct",
+    "open_to_close_pct",
+    "gap_open_pct",
+    "amplitude",
+    "high_20d_break",
+    "platform_break_20d",
+    "stage_high_20d",
+    "dragon_tiger_flag",
+    "dragon_tiger_net_rate",
+    "dragon_tiger_reason",
+    "limit_touch_count",
+    "open_board_count",
+    "limitup_quality_score",
+    "intraday_risk_score"
   ],
   "latest_files": [
     "wp_latest_snapshot.csv",
