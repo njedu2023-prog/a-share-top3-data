@@ -1,7 +1,8 @@
 {
-  "generated_at": "2026-07-06 15:13:27",
-  "status": "empty_schema_ready",
-  "row_count": 0,
+  "generated_at": "2026-07-06 15:30:46",
+  "status": "ok",
+  "row_count": 278,
+  "candidate_count": 278,
   "columns": [
     "trade_date",
     "update_time",
