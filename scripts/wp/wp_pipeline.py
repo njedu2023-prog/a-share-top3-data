@@ -17,6 +17,7 @@ LATEST = WP_ROOT / "latest"
 DATA_LATEST = ROOT / "data" / "latest"
 RAW_ROOT = ROOT / "data" / "raw"
 RAW_BASE_URL = "https://raw.githubusercontent.com/njedu2023-prog/a-share-top3-data/main"
+LAST_SOURCE_TRADE_DATE = ""
 
 SCHEMA = [
     "trade_date", "update_time", "ts_code", "name", "price", "open", "high", "low",
@@ -43,6 +44,13 @@ def read_csv_source(relative_path: str) -> pd.DataFrame:
 
 def now_cn() -> datetime:
     return datetime.now(UTC).replace(tzinfo=None) + pd.Timedelta(hours=8)
+
+
+def target_trade_date() -> str:
+    env_date = os.environ.get("TRADE_DATE", "").strip()
+    if len(env_date) == 8 and env_date.isdigit():
+        return env_date
+    return now_cn().strftime("%Y%m%d")
 
 
 def ensure(path: Path) -> Path:
@@ -111,6 +119,7 @@ def previous_limitup_codes(trade_date: str) -> set[str]:
 
 
 def build_from_latest_data() -> pd.DataFrame:
+    global LAST_SOURCE_TRADE_DATE
     daily = read_csv_source("data/latest/daily.csv")
     if daily.empty:
         return pd.DataFrame(columns=SCHEMA)
@@ -125,6 +134,9 @@ def build_from_latest_data() -> pd.DataFrame:
     out = daily.copy()
     out["ts_code"] = out["ts_code"].astype(str).str.strip()
     trade_date = latest_trade_date(out, daily_basic, stk_limit, limit_list)
+    LAST_SOURCE_TRADE_DATE = trade_date
+    if trade_date != target_trade_date() and os.environ.get("WP_ALLOW_STALE_DATA", "").strip() != "1":
+        return pd.DataFrame(columns=SCHEMA)
     out["trade_date"] = out.get("trade_date", trade_date).fillna(trade_date).astype(str)
 
     if not daily_basic.empty:
@@ -244,9 +256,22 @@ def build_rank_input(candidates: pd.DataFrame | None = None) -> pd.DataFrame:
 
 def healthcheck(rank_input: pd.DataFrame | None = None) -> dict:
     df = rank_input if rank_input is not None else pd.read_csv(LATEST / "wp_latest_rank_input.csv")
+    data_trade_date = ""
+    if not df.empty and "trade_date" in df.columns:
+        dates = df["trade_date"].dropna().astype(str).str.replace("-", "", regex=False)
+        dates = dates[dates.str.len() == 8]
+        if not dates.empty:
+            data_trade_date = str(sorted(dates.unique())[-1])
+    source_trade_date = data_trade_date or LAST_SOURCE_TRADE_DATE
+    expected_trade_date = target_trade_date()
+    status = "ok" if not df.empty else "empty_schema_ready"
+    if source_trade_date and source_trade_date != expected_trade_date:
+        status = "stale_data"
     payload = {
         "generated_at": now_cn().strftime("%Y-%m-%d %H:%M:%S"),
-        "status": "ok" if not df.empty else "empty_schema_ready",
+        "status": status,
+        "source_trade_date": source_trade_date,
+        "expected_trade_date": expected_trade_date,
         "row_count": int(len(df)),
         "candidate_count": int(len(df)),
         "columns": list(df.columns),
