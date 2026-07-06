@@ -1,0 +1,40 @@
+{
+  "generated_at": "2026-07-06 14:55:23",
+  "status": "empty_schema_ready",
+  "row_count": 0,
+  "columns": [
+    "trade_date",
+    "update_time",
+    "ts_code",
+    "name",
+    "price",
+    "open",
+    "high",
+    "low",
+    "close",
+    "pre_close",
+    "pct_chg",
+    "amount",
+    "volume",
+    "turnover_rate",
+    "volume_ratio",
+    "sector_name",
+    "sector_rank",
+    "sector_limitup_count",
+    "sector_gt6_count",
+    "sector_amount_ratio",
+    "pre_day_limitup",
+    "today_limitup",
+    "today_limit_up_price",
+    "prev_limit_up_price",
+    "ret_5d",
+    "ret_20d"
+  ],
+  "latest_files": [
+    "wp_latest_snapshot.csv",
+    "wp_latest_features.csv",
+    "wp_latest_candidates.csv",
+    "wp_latest_rank_input.csv",
+    "wp_manifest.json"
+  ]
+}

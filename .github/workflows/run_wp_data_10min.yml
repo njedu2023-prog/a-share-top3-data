@@ -1,0 +1,28 @@
+name: Run WP Data 10min
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "*/10 1-7 * * 1-5"
+
+permissions:
+  contents: write
+
+jobs:
+  wp-data:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      - name: Build WP data chain
+        run: python scripts/wp/wp_pipeline.py
+      - name: Commit WP data through GitHub API
+        run: python scripts/wp/github_commit_paths.py "Update WP data" data/wp
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
