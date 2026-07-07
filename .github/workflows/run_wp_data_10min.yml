@@ -2,6 +2,13 @@ name: Run WP Data 10min
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - scripts/fetch_daily_snapshots.py
+      - scripts/wp/wp_pipeline.py
+      - .github/workflows/run_wp_data_10min.yml
   schedule:
     - cron: "*/10 * * * 1-5"
 
