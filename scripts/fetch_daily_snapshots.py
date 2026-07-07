@@ -1043,7 +1043,7 @@ def build_wp_pre_candidates(
     base_latest: Path,
     dfs: Dict[str, pd.DataFrame],
     *,
-    min_pct_chg: float = 6.0,
+    min_pct_chg: float = 8.0,
 ) -> List[str]:
     daily = dfs.get("daily", pd.DataFrame())
     limit_list = dfs.get("limit_list_d", pd.DataFrame())
@@ -1638,7 +1638,7 @@ def run_intraday_upgrade(
         base_raw,
         base_latest,
         dfs,
-        min_pct_chg=float(os.getenv("WP_INTRADAY_MIN_PCT", "6")),
+        min_pct_chg=float(os.getenv("WP_INTRADAY_MIN_PCT", "8")),
     )
     priority_symbols = build_intraday_universe(base_raw)
     quote_df = pd.DataFrame(columns=_realtime_quote_columns())
@@ -1649,7 +1649,7 @@ def run_intraday_upgrade(
         save_df(quote_df, base_latest / "realtime_quote.csv", columns=_realtime_quote_columns())
         quote_candidates: List[str] = []
         if not quote_df.empty and "pct_chg" in quote_df.columns:
-            quote_candidates = quote_df.loc[_to_num(quote_df["pct_chg"]) > float(os.getenv("WP_INTRADAY_MIN_PCT", "6")), "ts_code"].map(_norm_ts_code).tolist()
+            quote_candidates = quote_df.loc[_to_num(quote_df["pct_chg"]) > float(os.getenv("WP_INTRADAY_MIN_PCT", "8")), "ts_code"].map(_norm_ts_code).tolist()
         seen = set()
         symbols = []
         for code in priority_symbols + quote_candidates:

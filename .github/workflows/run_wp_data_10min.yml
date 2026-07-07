@@ -115,6 +115,7 @@ jobs:
           REALTIME_QUOTE_CHUNK_SIZE: "300"
           MINUTE_FREQ: "1min"
           MAX_MINUTE_SYMBOLS: "6000"
+          WP_INTRADAY_MIN_PCT: "8"
       - name: Build WP data chain
         if: env.RUN_WP != '0'
         run: python scripts/wp/wp_pipeline.py

@@ -382,7 +382,7 @@ def build_from_latest_data() -> pd.DataFrame:
     out["tail_lift_flag"] = np.where((out["late_volume_ratio"] >= 1.8) & (out["close_position"] >= 82) & (out["open_to_close_pct"] >= 3), 1, 0)
     out["announcement_flag"] = 0
 
-    sector_gt6 = out.assign(_gt6=pct_chg > 6).groupby("sector_name")["_gt6"].sum()
+    sector_gt6 = out.assign(_gt6=pct_chg > 8).groupby("sector_name")["_gt6"].sum()
     sector_amount = out.groupby("sector_name")["amount"].sum()
     sector_turnover = out.groupby("sector_name")["turnover_rate"].mean() if "turnover_rate" in out.columns else pd.Series(dtype="float64")
     amount_median = float(sector_amount.median()) if len(sector_amount) else 0.0
@@ -486,7 +486,7 @@ def build_candidates(features: pd.DataFrame | None = None) -> pd.DataFrame:
     current = now_cn()
     df = normalize(features if features is not None else pd.read_csv(LATEST / "wp_latest_features.csv"))
     if not df.empty:
-        mask = (pd.to_numeric(df["pct_chg"], errors="coerce").fillna(0) > 6) & (pd.to_numeric(df["pre_day_limitup"], errors="coerce").fillna(0) != 1) & (pd.to_numeric(df["today_limitup"], errors="coerce").fillna(0) != 1)
+        mask = (pd.to_numeric(df["pct_chg"], errors="coerce").fillna(0) > 8) & (pd.to_numeric(df["pre_day_limitup"], errors="coerce").fillna(0) != 1) & (pd.to_numeric(df["today_limitup"], errors="coerce").fillna(0) != 1)
         df = df.loc[mask].copy()
     write_csv(df, WP_ROOT / "candidates" / current.strftime("%Y") / current.strftime("%Y%m%d") / "wp_candidates.csv")
     write_csv(df, LATEST / "wp_latest_candidates.csv")
