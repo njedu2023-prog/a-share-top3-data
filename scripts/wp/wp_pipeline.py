@@ -112,6 +112,12 @@ def to_num(frame: pd.DataFrame, column: str, default: float = 0.0) -> pd.Series:
     return pd.to_numeric(frame[column], errors="coerce").fillna(default)
 
 
+def parse_yyyymmdd(series: pd.Series) -> pd.Series:
+    text = series.astype(str).str.strip().str.replace(r"\.0$", "", regex=True)
+    text = text.where(text.str.fullmatch(r"\d{8}"), "")
+    return pd.to_datetime(text, format="%Y%m%d", errors="coerce")
+
+
 def latest_trade_date(*frames: pd.DataFrame) -> str:
     env_date = os.environ.get("TRADE_DATE", "").strip()
     if len(env_date) == 8 and env_date.isdigit():
@@ -124,6 +130,17 @@ def latest_trade_date(*frames: pd.DataFrame) -> str:
     if dates:
         return sorted(dates)[-1]
     return now_cn().strftime("%Y%m%d")
+
+
+def latest_historical_daily_basic(trade_date: str) -> pd.DataFrame:
+    for date in reversed(available_raw_dates(trade_date)):
+        if date >= trade_date:
+            continue
+        frame = read_csv_source(f"data/raw/{date[:4]}/{date}/daily_basic.csv")
+        if not frame.empty:
+            frame["ts_code"] = frame["ts_code"].astype(str).str.strip()
+            return frame
+    return pd.DataFrame()
 
 
 def previous_limitup_codes(trade_date: str) -> set[str]:
@@ -141,7 +158,9 @@ def previous_limitup_codes(trade_date: str) -> set[str]:
 
 
 def available_raw_dates(trade_date: str, lookback_days: int = 45) -> list[str]:
-    start = (datetime.strptime(trade_date, "%Y%m%d") - pd.Timedelta(days=lookback_days)).strftime("%Y%m%d")
+    start_dt = datetime.strptime(trade_date, "%Y%m%d") - pd.Timedelta(days=lookback_days)
+    end_dt = datetime.strptime(trade_date, "%Y%m%d")
+    start = start_dt.strftime("%Y%m%d")
     dates: list[str] = []
     year_dir = RAW_ROOT / trade_date[:4]
     if year_dir.exists():
@@ -150,6 +169,12 @@ def available_raw_dates(trade_date: str, lookback_days: int = 45) -> list[str]:
         payload = read_json_url(f"https://api.github.com/repos/njedu2023-prog/a-share-top3-data/contents/data/raw/{trade_date[:4]}?ref=main")
         if isinstance(payload, list):
             dates.extend(item.get("name", "") for item in payload if item.get("type") == "dir")
+    if not dates:
+        current = start_dt
+        while current <= end_dt:
+            if current.weekday() < 5:
+                dates.append(current.strftime("%Y%m%d"))
+            current += pd.Timedelta(days=1)
     return sorted(date for date in dates if start <= date <= trade_date)
 
 
@@ -160,9 +185,13 @@ def build_history_features(out: pd.DataFrame, trade_date: str, current_daily: pd
         frame = current_daily if date == trade_date else read_csv_source(daily_path)
         if frame.empty:
             continue
-        keep = [c for c in ["ts_code", "trade_date", "close", "high", "low", "amount", "pct_chg"] if c in frame.columns]
+        keep = [c for c in ["ts_code", "trade_date", "close", "high", "low", "amount", "vol", "volume", "pct_chg"] if c in frame.columns]
         frame = frame[keep].copy()
         frame["trade_date"] = frame.get("trade_date", date)
+        if "vol" not in frame.columns and "volume" in frame.columns:
+            frame["vol"] = frame["volume"]
+        if date != trade_date and "amount" in frame.columns:
+            frame["amount"] = pd.to_numeric(frame["amount"], errors="coerce") * 1000
         frames.append(frame)
     if not frames:
         return out
@@ -170,7 +199,7 @@ def build_history_features(out: pd.DataFrame, trade_date: str, current_daily: pd
     hist = pd.concat(frames, ignore_index=True, sort=False)
     hist["ts_code"] = hist["ts_code"].astype(str).str.strip()
     hist["trade_date"] = hist["trade_date"].astype(str).str.replace("-", "", regex=False)
-    for col in ["close", "high", "low", "amount", "pct_chg"]:
+    for col in ["close", "high", "low", "amount", "vol", "pct_chg"]:
         if col in hist.columns:
             hist[col] = pd.to_numeric(hist[col], errors="coerce")
     hist = hist.dropna(subset=["ts_code", "trade_date"]).sort_values(["ts_code", "trade_date"])
@@ -180,6 +209,11 @@ def build_history_features(out: pd.DataFrame, trade_date: str, current_daily: pd
         return out
     prev = hist[hist["trade_date"] < trade_date].copy()
     rows = []
+    prev_basic = pd.DataFrame()
+    if not daily_basic.empty and {"ts_code", "turnover_rate"}.issubset(daily_basic.columns):
+        prev_basic = daily_basic.copy()
+        prev_basic["ts_code"] = prev_basic["ts_code"].astype(str).str.strip()
+        prev_basic = prev_basic.drop_duplicates("ts_code").set_index("ts_code")
     current = current.set_index("ts_code")
     for ts_code, group in prev.groupby("ts_code"):
         if ts_code not in current.index:
@@ -189,6 +223,7 @@ def build_history_features(out: pd.DataFrame, trade_date: str, current_daily: pd
         close = float(cur.get("close", np.nan))
         high = float(cur.get("high", np.nan))
         amount = float(cur.get("amount", np.nan))
+        cur_vol = float(cur.get("vol", np.nan))
         tail3 = group.tail(3)
         tail5 = group.tail(5)
         tail10 = group.tail(10)
@@ -202,10 +237,23 @@ def build_history_features(out: pd.DataFrame, trade_date: str, current_daily: pd
         ma20 = tail20["close"].mean()
         high_20 = tail20["high"].max()
         close_high_20 = tail20["close"].max()
+        avg_vol_5 = tail5["vol"].mean() if "vol" in tail5.columns and len(tail5) else np.nan
+        prev_vol = float(group["vol"].iloc[-1]) if "vol" in group.columns and len(group) else np.nan
+        prev_turnover = np.nan
+        if not prev_basic.empty and ts_code in prev_basic.index:
+            prev_turnover = pd.to_numeric(pd.Series([prev_basic.loc[ts_code].get("turnover_rate", np.nan)]), errors="coerce").iloc[0]
+        turnover_rate = (
+            prev_turnover * cur_vol / prev_vol
+            if pd.notna(prev_turnover) and prev_turnover > 0 and pd.notna(cur_vol) and cur_vol > 0 and pd.notna(prev_vol) and prev_vol > 0
+            else np.nan
+        )
         rows.append({
             "ts_code": ts_code,
             "amount_ratio_5d": amount / tail5["amount"].mean() if len(tail5) and tail5["amount"].mean() > 0 else np.nan,
             "amount_ratio_20d": amount / tail20["amount"].mean() if len(tail20) and tail20["amount"].mean() > 0 else np.nan,
+            "volume_ratio": cur_vol / avg_vol_5 if pd.notna(avg_vol_5) and avg_vol_5 > 0 and pd.notna(cur_vol) else np.nan,
+            "turnover_rate": turnover_rate,
+            "turnover_rate_5d_avg": prev_turnover if pd.notna(prev_turnover) else np.nan,
             "ret_3d": (close / close_3 - 1) * 100 if close_3 and close_3 > 0 else np.nan,
             "ret_5d": (close / close_5 - 1) * 100 if close_5 and close_5 > 0 else np.nan,
             "ret_10d": (close / close_10 - 1) * 100 if close_10 and close_10 > 0 else np.nan,
@@ -220,13 +268,6 @@ def build_history_features(out: pd.DataFrame, trade_date: str, current_daily: pd
     metrics = pd.DataFrame(rows)
     if metrics.empty:
         return out
-    turnover_5 = pd.DataFrame()
-    if not daily_basic.empty and {"ts_code", "turnover_rate"}.issubset(daily_basic.columns):
-        turnover_5 = daily_basic[["ts_code", "turnover_rate"]].copy()
-        turnover_5["turnover_rate_5d_avg"] = pd.to_numeric(turnover_5["turnover_rate"], errors="coerce")
-        turnover_5 = turnover_5[["ts_code", "turnover_rate_5d_avg"]]
-    if not turnover_5.empty:
-        metrics = metrics.merge(turnover_5.drop_duplicates("ts_code"), on="ts_code", how="left")
     return out.merge(metrics, on="ts_code", how="left", suffixes=("", "_hist"))
 
 
@@ -237,6 +278,8 @@ def build_from_latest_data() -> pd.DataFrame:
     if daily.empty and realtime_snapshot.empty:
         return pd.DataFrame(columns=SCHEMA)
     daily_basic = read_csv_source("data/latest/daily_basic.csv")
+    if daily_basic.empty:
+        daily_basic = latest_historical_daily_basic(trade_date=target_trade_date())
     stock_basic = read_csv_source("data/latest/stock_basic.csv")
     stk_limit = read_csv_source("data/latest/stk_limit.csv")
     limit_list = read_csv_source("data/latest/limit_list_d.csv")
@@ -301,7 +344,7 @@ def build_from_latest_data() -> pd.DataFrame:
     out["amount"] = np.where(is_realtime_amount, amount_raw, amount_raw * 1000)
     out["sector_name"] = out.get("industry", pd.Series("未分类", index=out.index)).fillna("未分类").astype(str)
     if "list_date" in out.columns:
-        list_date = pd.to_datetime(out["list_date"].astype(str), format="%Y%m%d", errors="coerce")
+        list_date = parse_yyyymmdd(out["list_date"])
         trade_dt = pd.to_datetime(trade_date, format="%Y%m%d", errors="coerce")
         out["stock_age_days"] = (trade_dt - list_date).dt.days
     else:
@@ -365,7 +408,14 @@ def build_from_latest_data() -> pd.DataFrame:
         keep = [c for c in ["ts_code", "dragon_tiger_flag", "dragon_tiger_net_rate", "dragon_tiger_reason"] if c in top.columns]
         out = out.merge(top[keep].drop_duplicates("ts_code"), on="ts_code", how="left")
 
-    out = build_history_features(out, trade_date, daily, daily_basic)
+    current_for_history = out.copy()
+    current_for_history["vol"] = to_num(current_for_history, "volume", np.nan)
+    out = build_history_features(out, trade_date, current_for_history, daily_basic)
+    for col in ["volume_ratio", "turnover_rate", "turnover_rate_5d_avg"]:
+        hist_col = f"{col}_hist"
+        if hist_col in out.columns:
+            base = pd.to_numeric(out[col], errors="coerce") if col in out.columns else pd.Series(np.nan, index=out.index)
+            out[col] = base.where(base.notna(), pd.to_numeric(out[hist_col], errors="coerce"))
 
     out["sector_rank"] = to_num(out, "sector_rank", 99)
     out["sector_limitup_count"] = to_num(out, "sector_limitup_count", 0)
