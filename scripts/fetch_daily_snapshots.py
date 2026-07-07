@@ -232,6 +232,23 @@ def _realtime_snapshot_columns() -> List[str]:
     ]
 
 
+def _realtime_quote_columns() -> List[str]:
+    return [
+        "ts_code",
+        "trade_date",
+        "update_time",
+        "name",
+        "price",
+        "open",
+        "high",
+        "low",
+        "pre_close",
+        "pct_chg",
+        "vol",
+        "amount",
+    ]
+
+
 def _clear_csv_dir(path: Path) -> None:
     ensure_dir(path)
     for p in path.glob("*.csv"):
@@ -1434,6 +1451,67 @@ def _known_symbol_universe(dfs: Dict[str, pd.DataFrame]) -> List[str]:
     return out
 
 
+def fetch_realtime_quotes(symbols: List[str], trade_date: str) -> Tuple[pd.DataFrame, Dict[str, Any]]:
+    info: Dict[str, Any] = {"ok": False, "rows": 0, "chunks": 0, "error": ""}
+    chunk_size = max(1, _env_int("REALTIME_QUOTE_CHUNK_SIZE", 800))
+    max_symbols = _env_int("MAX_REALTIME_QUOTE_SYMBOLS", 6000)
+    symbols = [s for s in symbols if s]
+    if max_symbols > 0:
+        symbols = symbols[:max_symbols]
+    frames: List[pd.DataFrame] = []
+    fn = getattr(ts, "realtime_quote", None)
+    if not callable(fn):
+        info["error"] = "tushare.realtime_quote not available"
+        return pd.DataFrame(columns=_realtime_quote_columns()), info
+    try:
+        for i in range(0, len(symbols), chunk_size):
+            chunk = symbols[i : i + chunk_size]
+            if not chunk:
+                continue
+            df = fn(ts_code=",".join(chunk))
+            info["chunks"] += 1
+            if df is not None and not df.empty:
+                frames.append(df)
+        if not frames:
+            info["ok"] = True
+            return pd.DataFrame(columns=_realtime_quote_columns()), info
+        raw = pd.concat(frames, ignore_index=True, sort=False)
+        col_map = {str(c).strip().lower(): c for c in raw.columns}
+
+        def pick(*names: str) -> pd.Series:
+            for name in names:
+                col = col_map.get(name.lower())
+                if col is not None:
+                    return raw[col]
+            return pd.Series([pd.NA] * len(raw), index=raw.index)
+
+        out = pd.DataFrame()
+        out["ts_code"] = pick("ts_code", "code", "symbol").map(_norm_ts_code)
+        out["trade_date"] = trade_date
+        date_text = pick("date", "trade_date").fillna("").astype(str)
+        time_text = pick("time", "trade_time").fillna("").astype(str)
+        out["update_time"] = (date_text + " " + time_text).str.strip()
+        out.loc[out["update_time"].str.strip().eq(""), "update_time"] = bj_now().strftime("%Y-%m-%d %H:%M:%S")
+        out["name"] = pick("name")
+        out["price"] = _to_num(pick("price", "close", "最新价"))
+        out["open"] = _to_num(pick("open", "开盘价"))
+        out["high"] = _to_num(pick("high", "最高价"))
+        out["low"] = _to_num(pick("low", "最低价"))
+        out["pre_close"] = _to_num(pick("pre_close", "preclose", "昨收"))
+        pct = _to_num(pick("pct_chg", "pct_change", "change_pct", "涨跌幅"))
+        calc_pct = (out["price"] / out["pre_close"].replace(0, pd.NA) - 1) * 100
+        out["pct_chg"] = pct.where(pct.notna() & (pct != 0), calc_pct)
+        out["vol"] = _to_num(pick("vol", "volume", "成交量"))
+        out["amount"] = _to_num(pick("amount", "成交额"))
+        out = out[out["ts_code"] != ""].drop_duplicates("ts_code")
+        info["ok"] = True
+        info["rows"] = int(len(out))
+        return out.reindex(columns=_realtime_quote_columns()), info
+    except Exception as e:
+        info["error"] = repr(e)
+        return pd.DataFrame(columns=_realtime_quote_columns()), info
+
+
 def _previous_close_map(trade_date: str, dfs: Dict[str, pd.DataFrame]) -> Dict[str, float]:
     base: Dict[str, float] = {}
     daily = dfs.get("daily", pd.DataFrame())
@@ -1545,12 +1623,25 @@ def run_intraday_upgrade(
         min_pct_chg=float(os.getenv("WP_INTRADAY_MIN_PCT", "6")),
     )
     priority_symbols = build_intraday_universe(base_raw)
+    quote_df = pd.DataFrame(columns=_realtime_quote_columns())
+    quote_info: Dict[str, Any] = {"ok": False, "rows": 0, "error": "disabled"}
     if enable_market_minute_scan:
-        all_symbols = _known_symbol_universe(dfs)
-        seen = set(priority_symbols)
-        symbols = priority_symbols + [code for code in all_symbols if code not in seen]
+        quote_df, quote_info = fetch_realtime_quotes(_known_symbol_universe(dfs), trade_date)
+        save_df(quote_df, base_raw / "realtime_quote.csv", columns=_realtime_quote_columns())
+        save_df(quote_df, base_latest / "realtime_quote.csv", columns=_realtime_quote_columns())
+        quote_candidates: List[str] = []
+        if not quote_df.empty and "pct_chg" in quote_df.columns:
+            quote_candidates = quote_df.loc[_to_num(quote_df["pct_chg"]) > float(os.getenv("WP_INTRADAY_MIN_PCT", "6")), "ts_code"].map(_norm_ts_code).tolist()
+        seen = set()
+        symbols = []
+        for code in priority_symbols + quote_candidates:
+            if code and code not in seen:
+                seen.add(code)
+                symbols.append(code)
     else:
         symbols = priority_symbols
+        save_df(pd.DataFrame(), base_raw / "realtime_quote.csv", columns=_realtime_quote_columns())
+        save_df(pd.DataFrame(), base_latest / "realtime_quote.csv", columns=_realtime_quote_columns())
     if max_symbols > 0:
         symbols = symbols[:max_symbols]
     limit_map = _limit_price_map(dfs.get("stk_limit", pd.DataFrame()))
@@ -1566,6 +1657,7 @@ def run_intraday_upgrade(
         "enabled": enable_minute,
         "realtime_only": realtime_minute_only,
         "market_minute_scan": enable_market_minute_scan,
+        "realtime_quote": quote_info,
         "ok": False,
         "freq": minute_freq,
         "wp_pre_candidates": int(len(wp_symbols)),
