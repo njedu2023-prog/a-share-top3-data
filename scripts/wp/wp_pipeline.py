@@ -36,7 +36,7 @@ SCHEMA = [
     "limitup_quality_score", "intraday_risk_score", "announcement_flag",
     "hot_topic_flag", "auction_price", "auction_vol", "auction_amount",
     "auction_pct_chg", "auction_amount_ratio", "auction_strength_score",
-    "stock_age_days", "suspended_flag", "delist_flag",
+    "realtime_source", "stock_age_days", "suspended_flag", "delist_flag",
     "data_quality_flag",
 ]
 
@@ -233,7 +233,8 @@ def build_history_features(out: pd.DataFrame, trade_date: str, current_daily: pd
 def build_from_latest_data() -> pd.DataFrame:
     global LAST_SOURCE_TRADE_DATE
     daily = read_csv_source("data/latest/daily.csv")
-    if daily.empty:
+    realtime_snapshot = read_csv_source("data/latest/realtime_snapshot.csv")
+    if daily.empty and realtime_snapshot.empty:
         return pd.DataFrame(columns=SCHEMA)
     daily_basic = read_csv_source("data/latest/daily_basic.csv")
     stock_basic = read_csv_source("data/latest/stock_basic.csv")
@@ -244,9 +245,14 @@ def build_from_latest_data() -> pd.DataFrame:
     intraday = read_csv_source("data/latest/intraday_features.csv")
     auction_features = read_csv_source("data/latest/auction_features.csv")
 
-    out = daily.copy()
+    trade_date = latest_trade_date(realtime_snapshot, daily, daily_basic, stk_limit, limit_list)
+    use_realtime = (
+        not realtime_snapshot.empty
+        and "trade_date" in realtime_snapshot.columns
+        and str(trade_date) == target_trade_date()
+    )
+    out = realtime_snapshot.copy() if use_realtime else daily.copy()
     out["ts_code"] = out["ts_code"].astype(str).str.strip()
-    trade_date = latest_trade_date(out, daily_basic, stk_limit, limit_list)
     LAST_SOURCE_TRADE_DATE = trade_date
     if trade_date != target_trade_date() and os.environ.get("WP_ALLOW_STALE_DATA", "").strip() != "1":
         return pd.DataFrame(columns=SCHEMA)
@@ -283,10 +289,16 @@ def build_from_latest_data() -> pd.DataFrame:
 
     close = to_num(out, "close")
     pct_chg = to_num(out, "pct_chg")
-    out["pre_close"] = np.where((1 + pct_chg / 100) > 0, close / (1 + pct_chg / 100), np.nan)
+    pre_close_existing = to_num(out, "pre_close", np.nan)
+    out["pre_close"] = pre_close_existing.where(
+        pre_close_existing.notna() & (pre_close_existing > 0),
+        np.where((1 + pct_chg / 100) > 0, close / (1 + pct_chg / 100), np.nan),
+    )
     out["price"] = close
     out["volume"] = to_num(out, "vol")
-    out["amount"] = to_num(out, "amount") * 1000
+    amount_raw = to_num(out, "amount")
+    is_realtime_amount = out.get("realtime_source", pd.Series("", index=out.index)).fillna("").astype(str).ne("")
+    out["amount"] = np.where(is_realtime_amount, amount_raw, amount_raw * 1000)
     out["sector_name"] = out.get("industry", pd.Series("未分类", index=out.index)).fillna("未分类").astype(str)
     if "list_date" in out.columns:
         list_date = pd.to_datetime(out["list_date"].astype(str), format="%Y%m%d", errors="coerce")
@@ -299,7 +311,13 @@ def build_from_latest_data() -> pd.DataFrame:
 
     current_limit_codes = set()
     if not limit_list.empty and "ts_code" in limit_list.columns:
-        current_limit_codes = set(limit_list["ts_code"].dropna().astype(str).str.strip())
+        limit_dates = []
+        if "trade_date" in limit_list.columns:
+            limit_dates = (
+                limit_list["trade_date"].dropna().astype(str).str.replace("-", "", regex=False).tolist()
+            )
+        if not limit_dates or str(sorted(limit_dates)[-1]) == str(trade_date):
+            current_limit_codes = set(limit_list["ts_code"].dropna().astype(str).str.strip())
     prev_limit_codes = previous_limitup_codes(trade_date)
     up_limit = to_num(out, "up_limit")
     out["today_limit_up_price"] = up_limit

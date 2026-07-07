@@ -214,6 +214,24 @@ def _minute_columns() -> List[str]:
     return ["ts_code", "trade_time", "open", "high", "low", "close", "vol", "amount"]
 
 
+def _realtime_snapshot_columns() -> List[str]:
+    return [
+        "ts_code",
+        "trade_date",
+        "update_time",
+        "price",
+        "open",
+        "high",
+        "low",
+        "close",
+        "pre_close",
+        "pct_chg",
+        "vol",
+        "amount",
+        "realtime_source",
+    ]
+
+
 def _clear_csv_dir(path: Path) -> None:
     ensure_dir(path)
     for p in path.glob("*.csv"):
@@ -398,7 +416,7 @@ def build_jobs(pro, trade_date: str) -> List[FetchJob]:
         )
 
     # 3) 日线行情
-    daily_fields = "ts_code,trade_date,open,high,low,close,vol,amount,pct_chg"
+    daily_fields = "ts_code,trade_date,open,high,low,close,pre_close,vol,amount,pct_chg"
     jobs.append(
         FetchJob(
             key="daily",
@@ -1125,6 +1143,28 @@ def fetch_minute_for_symbol(
     return df, info
 
 
+def fetch_market_minutes(
+    pro,
+    trade_date: str,
+    freq: str = "1min",
+    end_dt: Optional[datetime] = None,
+) -> Tuple[pd.DataFrame, Dict[str, Any]]:
+    day = _trade_date_dash(trade_date)
+    if end_dt is None:
+        end_text = f"{day} 15:00:00"
+    else:
+        end_text = end_dt.strftime("%Y-%m-%d %H:%M:%S")
+    fields = "ts_code,trade_time,open,high,low,close,vol,amount"
+    return safe_query(
+        pro,
+        "stk_mins",
+        fields=fields,
+        start_date=f"{day} 09:30:00",
+        end_date=end_text,
+        freq=freq,
+    )
+
+
 def _limit_price_map(stk_limit_df: pd.DataFrame) -> Dict[str, float]:
     if stk_limit_df is None or stk_limit_df.empty or "ts_code" not in stk_limit_df.columns or "up_limit" not in stk_limit_df.columns:
         return {}
@@ -1380,6 +1420,108 @@ def build_intraday_features(
     return pd.DataFrame(rows, columns=_intraday_feature_columns())
 
 
+def _known_symbol_universe(dfs: Dict[str, pd.DataFrame]) -> List[str]:
+    out: List[str] = []
+    seen = set()
+    for key in ("stock_basic", "daily", "daily_basic", "stk_limit"):
+        df = dfs.get(key, pd.DataFrame())
+        if df is None or df.empty or "ts_code" not in df.columns:
+            continue
+        for code in df["ts_code"].map(_norm_ts_code).tolist():
+            if code and code not in seen:
+                seen.add(code)
+                out.append(code)
+    return out
+
+
+def _previous_close_map(trade_date: str, dfs: Dict[str, pd.DataFrame]) -> Dict[str, float]:
+    base: Dict[str, float] = {}
+    daily = dfs.get("daily", pd.DataFrame())
+    if daily is not None and not daily.empty and "ts_code" in daily.columns:
+        tmp = daily.copy()
+        tmp["ts_code"] = tmp["ts_code"].map(_norm_ts_code)
+        price_col = "pre_close" if "pre_close" in tmp.columns and _to_num(tmp["pre_close"]).notna().any() else "close"
+        if price_col in tmp.columns:
+            tmp[price_col] = _to_num(tmp[price_col])
+            tmp = tmp.dropna(subset=[price_col]).drop_duplicates("ts_code")
+            base.update({str(row["ts_code"]): float(row[price_col]) for _, row in tmp.iterrows() if float(row[price_col]) > 0})
+
+    raw_root = Path("data/raw") / trade_date[:4]
+    if raw_root.exists():
+        prev_dates = sorted(p.name for p in raw_root.iterdir() if p.is_dir() and p.name < trade_date)
+        for prev in reversed(prev_dates[-10:]):
+            prev_daily = load_csv(raw_root / prev / "daily.csv")
+            if prev_daily.empty or "ts_code" not in prev_daily.columns or "close" not in prev_daily.columns:
+                continue
+            prev_daily = prev_daily.copy()
+            prev_daily["ts_code"] = prev_daily["ts_code"].map(_norm_ts_code)
+            prev_daily["close"] = _to_num(prev_daily["close"])
+            prev_daily = prev_daily.dropna(subset=["close"]).drop_duplicates("ts_code")
+            for _, row in prev_daily.iterrows():
+                code = str(row["ts_code"])
+                close = float(row["close"])
+                if code and close > 0 and code not in base:
+                    base[code] = close
+            if base:
+                break
+    return base
+
+
+def build_realtime_snapshot(
+    minute_frames: Dict[str, pd.DataFrame],
+    trade_date: str,
+    dfs: Dict[str, pd.DataFrame],
+) -> pd.DataFrame:
+    rows: List[Dict[str, Any]] = []
+    pre_close_map = _previous_close_map(trade_date, dfs)
+    for ts_code, frame in minute_frames.items():
+        if frame is None or frame.empty:
+            continue
+        work = frame.copy()
+        if "ts_code" not in work.columns:
+            work["ts_code"] = ts_code
+        times = _minute_time_series(work)
+        work["_dt"] = times
+        work = work.dropna(subset=["_dt"]).sort_values("_dt")
+        if work.empty or "close" not in work.columns:
+            continue
+        close = _to_num(work["close"])
+        valid_close = close.dropna()
+        if valid_close.empty:
+            continue
+        first = work.iloc[0]
+        last = work.iloc[-1]
+        price = float(valid_close.iloc[-1])
+        pre_close = float(pre_close_map.get(ts_code, 0.0))
+        pct_chg = (price / pre_close - 1) * 100 if pre_close > 0 else float("nan")
+        high = _to_num(work["high"]).max() if "high" in work.columns else valid_close.max()
+        low = _to_num(work["low"]).min() if "low" in work.columns else valid_close.min()
+        open_price = _to_num(pd.Series([first.get("open", first.get("close", pd.NA))])).iloc[0]
+        vol = _to_num(work["vol"]).fillna(0).sum() if "vol" in work.columns else 0
+        amount = _to_num(work["amount"]).fillna(0).sum() if "amount" in work.columns else 0
+        rows.append(
+            {
+                "ts_code": ts_code,
+                "trade_date": trade_date,
+                "update_time": last["_dt"].strftime("%Y-%m-%d %H:%M:%S"),
+                "price": price,
+                "open": open_price,
+                "high": high,
+                "low": low,
+                "close": price,
+                "pre_close": pre_close if pre_close > 0 else pd.NA,
+                "pct_chg": pct_chg,
+                "vol": vol,
+                "amount": amount,
+                "realtime_source": "stk_mins",
+            }
+        )
+    out = pd.DataFrame(rows, columns=_realtime_snapshot_columns())
+    if not out.empty:
+        out = out.sort_values(["pct_chg", "amount"], ascending=[False, False], na_position="last").reset_index(drop=True)
+    return out
+
+
 def run_intraday_upgrade(
     pro,
     trade_date: str,
@@ -1391,8 +1533,9 @@ def run_intraday_upgrade(
     enable_auction = _env_bool("ENABLE_AUCTION", "1")
     enable_minute = _env_bool("ENABLE_MINUTE", "1")
     realtime_minute_only = _env_bool("REALTIME_MINUTE_ONLY", "1")
+    enable_market_minute_scan = _env_bool("ENABLE_MARKET_MINUTE_SCAN", "0")
     minute_freq = os.getenv("MINUTE_FREQ", "1min").strip() or "1min"
-    max_symbols = max(0, _env_int("MAX_MINUTE_SYMBOLS", 80))
+    max_symbols = max(0, _env_int("MAX_MINUTE_SYMBOLS", 6000 if enable_market_minute_scan else 80))
 
     wp_symbols = build_wp_pre_candidates(
         trade_date,
@@ -1401,7 +1544,15 @@ def run_intraday_upgrade(
         dfs,
         min_pct_chg=float(os.getenv("WP_INTRADAY_MIN_PCT", "6")),
     )
-    symbols = build_intraday_universe(base_raw)[:max_symbols]
+    priority_symbols = build_intraday_universe(base_raw)
+    if enable_market_minute_scan:
+        all_symbols = _known_symbol_universe(dfs)
+        seen = set(priority_symbols)
+        symbols = priority_symbols + [code for code in all_symbols if code not in seen]
+    else:
+        symbols = priority_symbols
+    if max_symbols > 0:
+        symbols = symbols[:max_symbols]
     limit_map = _limit_price_map(dfs.get("stk_limit", pd.DataFrame()))
     now = bj_now()
     is_today = trade_date == now.strftime("%Y%m%d")
@@ -1414,6 +1565,7 @@ def run_intraday_upgrade(
     meta["minute"] = {
         "enabled": enable_minute,
         "realtime_only": realtime_minute_only,
+        "market_minute_scan": enable_market_minute_scan,
         "ok": False,
         "freq": minute_freq,
         "wp_pre_candidates": int(len(wp_symbols)),
@@ -1424,6 +1576,7 @@ def run_intraday_upgrade(
         "errors": [],
     }
     meta["intraday_features"] = {"ok": False, "rows": 0, "columns": [], "error": ""}
+    meta["realtime_snapshot"] = {"ok": False, "rows": 0, "columns": _realtime_snapshot_columns(), "error": ""}
 
     if enable_auction:
         try:
@@ -1474,12 +1627,30 @@ def run_intraday_upgrade(
             save_df(pd.DataFrame(columns=_minute_columns()), raw_minute_dir / f"{ts_code}.csv", columns=_minute_columns())
         _clear_csv_dir(latest_minute_dir)
     elif enable_minute and symbols:
-        for ts_code in symbols:
+        if enable_market_minute_scan:
+            try:
+                market_df, market_info = fetch_market_minutes(pro, trade_date, minute_freq, end_dt=minute_end_dt)
+                meta["minute"]["market_query"] = market_info
+                if market_info.get("ok") and not market_df.empty and "ts_code" in market_df.columns:
+                    market_df = market_df.copy()
+                    market_df["ts_code"] = market_df["ts_code"].map(_norm_ts_code)
+                    for ts_code, group in market_df.groupby("ts_code", sort=False):
+                        if ts_code in symbols:
+                            minute_frames[ts_code] = group.drop(columns=[], errors="ignore").copy()
+                    meta["minute"]["symbols_success"] = int(len(minute_frames))
+                else:
+                    meta["minute"]["market_query_empty"] = True
+            except Exception as e:
+                meta["minute"]["market_query"] = {"ok": False, "error": repr(e)}
+                print(f"[MARKET-MINUTE-FAILED] err={repr(e)}")
+
+        fallback_symbols = [code for code in symbols if code not in minute_frames]
+        if fallback_symbols:
+            meta["minute"]["fallback_symbol_query_count"] = int(len(fallback_symbols))
+        for ts_code in fallback_symbols:
             try:
                 df, info = fetch_minute_for_symbol(pro, ts_code, trade_date, minute_freq, end_dt=minute_end_dt)
                 minute_frames[ts_code] = df
-                save_df(df, raw_minute_dir / f"{ts_code}.csv", columns=list(df.columns) or _minute_columns())
-                save_df(df, latest_minute_dir / f"{ts_code}.csv", columns=list(df.columns) or _minute_columns())
                 if info.get("ok") and not df.empty:
                     meta["minute"]["symbols_success"] += 1
                 else:
@@ -1490,13 +1661,31 @@ def run_intraday_upgrade(
                 minute_frames[ts_code] = pd.DataFrame(columns=_minute_columns())
                 meta["minute"]["symbols_failed"] += 1
                 meta["minute"]["errors"].append({"ts_code": ts_code, "error": repr(e)})
-                save_df(minute_frames[ts_code], raw_minute_dir / f"{ts_code}.csv", columns=_minute_columns())
-                save_df(minute_frames[ts_code], latest_minute_dir / f"{ts_code}.csv", columns=_minute_columns())
                 print(f"[MINUTE-FAILED] ts_code={ts_code} err={repr(e)}")
+
+        for ts_code, df in minute_frames.items():
+            save_df(df, raw_minute_dir / f"{ts_code}.csv", columns=list(df.columns) or _minute_columns())
+            save_df(df, latest_minute_dir / f"{ts_code}.csv", columns=list(df.columns) or _minute_columns())
         meta["minute"]["errors"] = meta["minute"]["errors"][:30]
         meta["minute"]["ok"] = True
     else:
         meta["minute"]["ok"] = True
+
+    try:
+        realtime_snapshot = build_realtime_snapshot(
+            minute_frames=minute_frames,
+            trade_date=trade_date,
+            dfs=dfs,
+        )
+        save_df(realtime_snapshot, base_raw / "realtime_snapshot.csv", columns=_realtime_snapshot_columns())
+        save_df(realtime_snapshot, base_latest / "realtime_snapshot.csv", columns=_realtime_snapshot_columns())
+        meta["realtime_snapshot"].update({"ok": True, "rows": int(len(realtime_snapshot)), "error": ""})
+    except Exception as e:
+        meta["realtime_snapshot"]["error"] = repr(e)
+        save_df(pd.DataFrame(), base_raw / "realtime_snapshot.csv", columns=_realtime_snapshot_columns())
+        save_df(pd.DataFrame(), base_latest / "realtime_snapshot.csv", columns=_realtime_snapshot_columns())
+        print(f"[REALTIME-SNAPSHOT-FAILED] err={repr(e)}")
+        print(traceback.format_exc())
 
     try:
         features = build_intraday_features(

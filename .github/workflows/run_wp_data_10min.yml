@@ -3,7 +3,7 @@ name: Run WP Data 10min
 on:
   workflow_dispatch:
   schedule:
-    - cron: "*/10 1-7 * * 1-5"
+    - cron: "*/10 * * * 1-5"
 
 permissions:
   contents: write
@@ -58,8 +58,9 @@ jobs:
           ENABLE_AUCTION: "1"
           ENABLE_MINUTE: "1"
           REALTIME_MINUTE_ONLY: "1"
+          ENABLE_MARKET_MINUTE_SCAN: "1"
           MINUTE_FREQ: "1min"
-          MAX_MINUTE_SYMBOLS: "300"
+          MAX_MINUTE_SYMBOLS: "6000"
       - name: Build WP data chain
         if: env.RUN_WP != '0'
         run: python scripts/wp/wp_pipeline.py
