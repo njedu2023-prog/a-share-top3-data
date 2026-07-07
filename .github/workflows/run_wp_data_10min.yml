@@ -23,7 +23,16 @@ jobs:
           from datetime import datetime, time
           from zoneinfo import ZoneInfo
           now = datetime.now(ZoneInfo("Asia/Shanghai"))
-          in_day = now.weekday() < 5
+          holidays = {
+              "20260101",
+              "20260216", "20260217", "20260218", "20260219", "20260220",
+              "20260406",
+              "20260501", "20260504", "20260505",
+              "20260619",
+              "20260925",
+              "20261001", "20261002", "20261005", "20261006", "20261007", "20261008",
+          }
+          in_day = now.weekday() < 5 and now.strftime("%Y%m%d") not in holidays
           in_time = time(9, 25) <= now.time() <= time(11, 35) or time(12, 55) <= now.time() <= time(15, 10)
           if not (in_day and in_time):
               print(f"Skip outside A-share run window: {now:%Y-%m-%d %H:%M:%S}")

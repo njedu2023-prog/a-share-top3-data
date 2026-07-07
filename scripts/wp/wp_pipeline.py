@@ -23,14 +23,19 @@ SCHEMA = [
     "trade_date", "update_time", "ts_code", "name", "price", "open", "high", "low",
     "close", "pre_close", "pct_chg", "amount", "volume", "turnover_rate",
     "volume_ratio", "sector_name", "sector_rank", "sector_limitup_count",
-    "sector_gt6_count", "sector_amount_ratio", "pre_day_limitup", "today_limitup",
+    "sector_gt6_count", "sector_amount_ratio", "sector_net_inflow",
+    "sector_turnover", "sector_hot_score", "pre_day_limitup", "today_limitup",
     "today_limit_up_price", "prev_limit_up_price", "ret_5d", "ret_20d",
-    "amount_ratio_5d", "amount_ratio_20d", "turnover_rate_5d_avg",
+    "ret_3d", "ret_10d", "amount_ratio_5d", "amount_ratio_20d", "turnover_rate_5d_avg",
     "close_position", "intraday_pullback_pct", "open_to_close_pct",
     "gap_open_pct", "amplitude", "high_20d_break", "platform_break_20d",
-    "stage_high_20d", "dragon_tiger_flag", "dragon_tiger_net_rate",
+    "stage_high_20d", "ma5_position", "ma10_position", "ma20_position",
+    "intraday_vwap_position", "late_pullback_pct", "late_price_change_pct",
+    "late_volume_ratio", "tail_lift_flag", "dragon_tiger_flag", "dragon_tiger_net_rate",
     "dragon_tiger_reason", "limit_touch_count", "open_board_count",
-    "limitup_quality_score", "intraday_risk_score",
+    "limitup_quality_score", "intraday_risk_score", "announcement_flag",
+    "hot_topic_flag", "stock_age_days", "suspended_flag", "delist_flag",
+    "data_quality_flag",
 ]
 
 
@@ -172,31 +177,54 @@ def build_history_features(out: pd.DataFrame, trade_date: str, current_daily: pd
     if current.empty:
         return out
     prev = hist[hist["trade_date"] < trade_date].copy()
-    grouped = prev.groupby("ts_code")
-    amount_5 = grouped["amount"].tail(5).groupby(prev.loc[grouped["amount"].tail(5).index, "ts_code"]).mean()
-    amount_20 = grouped["amount"].tail(20).groupby(prev.loc[grouped["amount"].tail(20).index, "ts_code"]).mean()
-    close_5 = grouped["close"].tail(5).groupby(prev.loc[grouped["close"].tail(5).index, "ts_code"]).first()
-    close_20 = grouped["close"].tail(20).groupby(prev.loc[grouped["close"].tail(20).index, "ts_code"]).first()
-    high_20 = grouped["high"].tail(20).groupby(prev.loc[grouped["high"].tail(20).index, "ts_code"]).max()
-    close_high_20 = grouped["close"].tail(20).groupby(prev.loc[grouped["close"].tail(20).index, "ts_code"]).max()
-    turnover_5 = pd.Series(dtype="float64")
-    if not daily_basic.empty and {"ts_code", "turnover_rate"}.issubset(daily_basic.columns):
-        turnover_5 = pd.to_numeric(daily_basic.set_index("ts_code")["turnover_rate"], errors="coerce")
-
+    rows = []
     current = current.set_index("ts_code")
-    current_amount = pd.to_numeric(current["amount"], errors="coerce")
-    current_close = pd.to_numeric(current["close"], errors="coerce")
-    current_high = pd.to_numeric(current["high"], errors="coerce")
-    metrics = pd.DataFrame(index=current.index)
-    metrics["amount_ratio_5d"] = current_amount / amount_5.reindex(current.index).replace(0, np.nan)
-    metrics["amount_ratio_20d"] = current_amount / amount_20.reindex(current.index).replace(0, np.nan)
-    metrics["ret_5d"] = (current_close / close_5.reindex(current.index).replace(0, np.nan) - 1) * 100
-    metrics["ret_20d"] = (current_close / close_20.reindex(current.index).replace(0, np.nan) - 1) * 100
-    metrics["stage_high_20d"] = high_20.reindex(current.index)
-    metrics["high_20d_break"] = (current_high >= metrics["stage_high_20d"].fillna(current_high) * 0.999).astype(int)
-    metrics["platform_break_20d"] = (current_close >= close_high_20.reindex(current.index).fillna(current_close) * 1.005).astype(int)
-    metrics["turnover_rate_5d_avg"] = turnover_5.reindex(current.index)
-    metrics = metrics.reset_index().rename(columns={"index": "ts_code"})
+    for ts_code, group in prev.groupby("ts_code"):
+        if ts_code not in current.index:
+            continue
+        group = group.sort_values("trade_date")
+        cur = current.loc[ts_code]
+        close = float(cur.get("close", np.nan))
+        high = float(cur.get("high", np.nan))
+        amount = float(cur.get("amount", np.nan))
+        tail3 = group.tail(3)
+        tail5 = group.tail(5)
+        tail10 = group.tail(10)
+        tail20 = group.tail(20)
+        close_3 = tail3["close"].iloc[0] if len(tail3) else np.nan
+        close_5 = tail5["close"].iloc[0] if len(tail5) else np.nan
+        close_10 = tail10["close"].iloc[0] if len(tail10) else np.nan
+        close_20 = tail20["close"].iloc[0] if len(tail20) else np.nan
+        ma5 = tail5["close"].mean()
+        ma10 = tail10["close"].mean()
+        ma20 = tail20["close"].mean()
+        high_20 = tail20["high"].max()
+        close_high_20 = tail20["close"].max()
+        rows.append({
+            "ts_code": ts_code,
+            "amount_ratio_5d": amount / tail5["amount"].mean() if len(tail5) and tail5["amount"].mean() > 0 else np.nan,
+            "amount_ratio_20d": amount / tail20["amount"].mean() if len(tail20) and tail20["amount"].mean() > 0 else np.nan,
+            "ret_3d": (close / close_3 - 1) * 100 if close_3 and close_3 > 0 else np.nan,
+            "ret_5d": (close / close_5 - 1) * 100 if close_5 and close_5 > 0 else np.nan,
+            "ret_10d": (close / close_10 - 1) * 100 if close_10 and close_10 > 0 else np.nan,
+            "ret_20d": (close / close_20 - 1) * 100 if close_20 and close_20 > 0 else np.nan,
+            "ma5_position": (close / ma5 - 1) * 100 if ma5 and ma5 > 0 else np.nan,
+            "ma10_position": (close / ma10 - 1) * 100 if ma10 and ma10 > 0 else np.nan,
+            "ma20_position": (close / ma20 - 1) * 100 if ma20 and ma20 > 0 else np.nan,
+            "stage_high_20d": high_20,
+            "high_20d_break": int(high >= high_20 * 0.999) if high_20 and high_20 > 0 else 0,
+            "platform_break_20d": int(close >= close_high_20 * 1.005) if close_high_20 and close_high_20 > 0 else 0,
+        })
+    metrics = pd.DataFrame(rows)
+    if metrics.empty:
+        return out
+    turnover_5 = pd.DataFrame()
+    if not daily_basic.empty and {"ts_code", "turnover_rate"}.issubset(daily_basic.columns):
+        turnover_5 = daily_basic[["ts_code", "turnover_rate"]].copy()
+        turnover_5["turnover_rate_5d_avg"] = pd.to_numeric(turnover_5["turnover_rate"], errors="coerce")
+        turnover_5 = turnover_5[["ts_code", "turnover_rate_5d_avg"]]
+    if not turnover_5.empty:
+        metrics = metrics.merge(turnover_5.drop_duplicates("ts_code"), on="ts_code", how="left")
     return out.merge(metrics, on="ts_code", how="left", suffixes=("", "_hist"))
 
 
@@ -231,7 +259,14 @@ def build_from_latest_data() -> pd.DataFrame:
         keep = [c for c in ["ts_code", "up_limit", "down_limit"] if c in stk_limit.columns]
         out = out.merge(stk_limit[keep].drop_duplicates("ts_code"), on="ts_code", how="left")
     if not intraday.empty:
-        keep = [c for c in ["ts_code", "limit_touch_count", "open_board_count", "limitup_quality_score", "intraday_risk_score"] if c in intraday.columns]
+        keep = [
+            c for c in [
+                "ts_code", "limit_touch_count", "open_board_count", "limitup_quality_score",
+                "intraday_risk_score", "late_volume_ratio", "late_price_weakness",
+                "max_drawdown_after_limit", "intraday_vwap_position",
+            ]
+            if c in intraday.columns
+        ]
         out = out.merge(intraday[keep].drop_duplicates("ts_code"), on="ts_code", how="left")
 
     close = to_num(out, "close")
@@ -241,6 +276,14 @@ def build_from_latest_data() -> pd.DataFrame:
     out["volume"] = to_num(out, "vol")
     out["amount"] = to_num(out, "amount") * 1000
     out["sector_name"] = out.get("industry", pd.Series("未分类", index=out.index)).fillna("未分类").astype(str)
+    if "list_date" in out.columns:
+        list_date = pd.to_datetime(out["list_date"].astype(str), format="%Y%m%d", errors="coerce")
+        trade_dt = pd.to_datetime(trade_date, format="%Y%m%d", errors="coerce")
+        out["stock_age_days"] = (trade_dt - list_date).dt.days
+    else:
+        out["stock_age_days"] = np.nan
+    out["delist_flag"] = out.get("name", pd.Series("", index=out.index)).fillna("").astype(str).str.contains("退|退市", regex=True).astype(int)
+    out["suspended_flag"] = np.where((close <= 0) | (to_num(out, "amount") <= 0) | (to_num(out, "vol") <= 0), 1, 0)
 
     current_limit_codes = set()
     if not limit_list.empty and "ts_code" in limit_list.columns:
@@ -256,20 +299,33 @@ def build_from_latest_data() -> pd.DataFrame:
     out["open_to_close_pct"] = np.where(to_num(out, "open") > 0, (close / to_num(out, "open") - 1) * 100, 0)
     out["gap_open_pct"] = np.where(to_num(out, "pre_close") > 0, (to_num(out, "open") / to_num(out, "pre_close") - 1) * 100, 0)
     out["amplitude"] = np.where(to_num(out, "pre_close") > 0, (to_num(out, "high") - to_num(out, "low")) / to_num(out, "pre_close") * 100, 0)
+    out["late_pullback_pct"] = to_num(out, "max_drawdown_after_limit", np.nan).fillna(out["intraday_pullback_pct"])
+    out["late_price_change_pct"] = -to_num(out, "late_price_weakness", 0)
+    out["late_volume_ratio"] = to_num(out, "late_volume_ratio", 1)
+    typical_price = (to_num(out, "high") + to_num(out, "low") + close) / 3
+    out["intraday_vwap_position"] = to_num(out, "intraday_vwap_position", np.nan)
+    out["intraday_vwap_position"] = out["intraday_vwap_position"].where(out["intraday_vwap_position"].notna(), np.where(typical_price > 0, (close / typical_price - 1) * 100, 0))
+    out["tail_lift_flag"] = np.where((out["late_volume_ratio"] >= 1.8) & (out["close_position"] >= 82) & (out["open_to_close_pct"] >= 3), 1, 0)
+    out["announcement_flag"] = 0
 
     sector_gt6 = out.assign(_gt6=pct_chg > 6).groupby("sector_name")["_gt6"].sum()
     sector_amount = out.groupby("sector_name")["amount"].sum()
+    sector_turnover = out.groupby("sector_name")["turnover_rate"].mean() if "turnover_rate" in out.columns else pd.Series(dtype="float64")
     amount_median = float(sector_amount.median()) if len(sector_amount) else 0.0
     sector_metrics = pd.DataFrame({
         "sector_name": sector_gt6.index,
         "sector_gt6_count": sector_gt6.values,
         "sector_amount_ratio": [(sector_amount.get(name, 0.0) / amount_median) if amount_median > 0 else 1.0 for name in sector_gt6.index],
+        "sector_turnover": [sector_turnover.get(name, np.nan) for name in sector_gt6.index],
     })
     if not hot_boards.empty and "industry" in hot_boards.columns:
         boards = hot_boards.rename(columns={"industry": "sector_name", "rank": "sector_rank", "limit_up_count": "sector_limitup_count"})
         keep = [c for c in ["sector_name", "sector_rank", "sector_limitup_count"] if c in boards.columns]
         sector_metrics = sector_metrics.merge(boards[keep].drop_duplicates("sector_name"), on="sector_name", how="left")
     out = out.merge(sector_metrics, on="sector_name", how="left")
+    out["hot_topic_flag"] = np.where(to_num(out, "sector_rank", 99) <= 10, 1, 0)
+    out["sector_net_inflow"] = 0
+    out["sector_hot_score"] = np.maximum(0, 100 - to_num(out, "sector_rank", 99) * 4) + to_num(out, "sector_gt6_count", 0) * 5 + to_num(out, "sector_limitup_count", 0) * 8
 
     if not top_list.empty and "ts_code" in top_list.columns:
         top = top_list.copy()
@@ -284,16 +340,29 @@ def build_from_latest_data() -> pd.DataFrame:
     out["sector_limitup_count"] = to_num(out, "sector_limitup_count", 0)
     out["sector_gt6_count"] = to_num(out, "sector_gt6_count", 0)
     out["sector_amount_ratio"] = to_num(out, "sector_amount_ratio", 1)
-    out["ret_5d"] = to_num(out, "ret_5d", 0).replace(0, np.nan).fillna(pct_chg)
     out["ret_20d"] = to_num(out, "ret_20d", 0).replace(0, np.nan).fillna(pct_chg)
+    out["ret_5d"] = to_num(out, "ret_5d", 0).replace(0, np.nan).fillna(pct_chg)
+    out["ret_3d"] = to_num(out, "ret_3d", 0).replace(0, np.nan).fillna(out["ret_5d"])
+    out["ret_10d"] = to_num(out, "ret_10d", 0).replace(0, np.nan).fillna(out["ret_20d"])
     out["amount_ratio_5d"] = to_num(out, "amount_ratio_5d", 1).replace([np.inf, -np.inf], np.nan).fillna(to_num(out, "volume_ratio", 1))
     out["amount_ratio_20d"] = to_num(out, "amount_ratio_20d", 1).replace([np.inf, -np.inf], np.nan).fillna(out["amount_ratio_5d"])
     out["turnover_rate_5d_avg"] = to_num(out, "turnover_rate_5d_avg", 0)
     out["high_20d_break"] = to_num(out, "high_20d_break", 0)
     out["platform_break_20d"] = to_num(out, "platform_break_20d", 0)
     out["stage_high_20d"] = to_num(out, "stage_high_20d", 0)
+    out["ma5_position"] = to_num(out, "ma5_position", 0)
+    out["ma10_position"] = to_num(out, "ma10_position", 0)
+    out["ma20_position"] = to_num(out, "ma20_position", 0)
     out["dragon_tiger_flag"] = to_num(out, "dragon_tiger_flag", 0)
     out["dragon_tiger_net_rate"] = to_num(out, "dragon_tiger_net_rate", 0)
+    out["sector_net_inflow"] = to_num(out, "sector_net_inflow", 0)
+    out["sector_turnover"] = to_num(out, "sector_turnover", 0)
+    out["sector_hot_score"] = to_num(out, "sector_hot_score", 0).clip(0, 100)
+    out["announcement_flag"] = to_num(out, "announcement_flag", 0)
+    out["hot_topic_flag"] = to_num(out, "hot_topic_flag", 0)
+    required_core = ["ts_code", "close", "pre_close", "pct_chg", "amount", "today_limit_up_price"]
+    out["data_quality_flag"] = np.where(out[required_core].isna().any(axis=1), 1, 0)
+    out.loc[(to_num(out, "close") <= 0) | (to_num(out, "pre_close") <= 0) | (to_num(out, "amount") <= 0) | (to_num(out, "today_limit_up_price") <= 0), "data_quality_flag"] = 1
     return normalize(out)
 
 
