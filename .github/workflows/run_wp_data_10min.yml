@@ -16,38 +16,50 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
       - name: Check A-share run window
         if: github.event_name == 'schedule'
         run: |
           python - <<'PY'
+          import os
           from datetime import datetime, time
           from zoneinfo import ZoneInfo
+
+          import tushare as ts
+
           now = datetime.now(ZoneInfo("Asia/Shanghai"))
-          holidays = {
-              "20260101",
-              "20260216", "20260217", "20260218", "20260219", "20260220",
-              "20260406",
-              "20260501", "20260504", "20260505",
-              "20260619",
-              "20260925",
-              "20261001", "20261002", "20261005", "20261006", "20261007", "20261008",
-          }
-          in_day = now.weekday() < 5 and now.strftime("%Y%m%d") not in holidays
+          today = now.strftime("%Y%m%d")
           in_time = time(9, 25) <= now.time() <= time(11, 35) or time(12, 55) <= now.time() <= time(15, 10)
+
+          ts.set_token(os.environ["TUSHARE_TOKEN"])
+          pro = ts.pro_api()
+          cal = pro.trade_cal(exchange="SSE", start_date=today, end_date=today)
+          in_day = bool(len(cal) and int(cal.iloc[0].get("is_open", 0)) == 1)
+
           if not (in_day and in_time):
-              print(f"Skip outside A-share run window: {now:%Y-%m-%d %H:%M:%S}")
-              with open(__import__("os").environ["GITHUB_ENV"], "a", encoding="utf-8") as handle:
+              print(f"Skip outside A-share trading calendar/window: {now:%Y-%m-%d %H:%M:%S}, in_day={in_day}, in_time={in_time}")
+              with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as handle:
                   handle.write("RUN_WP=0\n")
               raise SystemExit(0)
-          print(f"Run window ok: {now:%Y-%m-%d %H:%M:%S}")
-          with open(__import__("os").environ["GITHUB_ENV"], "a", encoding="utf-8") as handle:
+          print(f"Run window ok by Tushare trade_cal: {now:%Y-%m-%d %H:%M:%S}")
+          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as handle:
               handle.write("RUN_WP=1\n")
           PY
-      - name: Install dependencies
+        env:
+          TUSHARE_TOKEN: ${{ secrets.TUSHARE_TOKEN }}
+      - name: Refresh Tushare realtime source
         if: env.RUN_WP != '0'
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
+        run: python scripts/fetch_daily_snapshots.py
+        env:
+          TUSHARE_TOKEN: ${{ secrets.TUSHARE_TOKEN }}
+          ENABLE_AUCTION: "1"
+          ENABLE_MINUTE: "1"
+          REALTIME_MINUTE_ONLY: "1"
+          MINUTE_FREQ: "1min"
+          MAX_MINUTE_SYMBOLS: "300"
       - name: Build WP data chain
         if: env.RUN_WP != '0'
         run: python scripts/wp/wp_pipeline.py

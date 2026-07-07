@@ -34,7 +34,9 @@ SCHEMA = [
     "late_volume_ratio", "tail_lift_flag", "dragon_tiger_flag", "dragon_tiger_net_rate",
     "dragon_tiger_reason", "limit_touch_count", "open_board_count",
     "limitup_quality_score", "intraday_risk_score", "announcement_flag",
-    "hot_topic_flag", "stock_age_days", "suspended_flag", "delist_flag",
+    "hot_topic_flag", "auction_price", "auction_vol", "auction_amount",
+    "auction_pct_chg", "auction_amount_ratio", "auction_strength_score",
+    "stock_age_days", "suspended_flag", "delist_flag",
     "data_quality_flag",
 ]
 
@@ -240,6 +242,7 @@ def build_from_latest_data() -> pd.DataFrame:
     hot_boards = read_csv_source("data/latest/hot_boards.csv")
     top_list = read_csv_source("data/latest/top_list.csv")
     intraday = read_csv_source("data/latest/intraday_features.csv")
+    auction_features = read_csv_source("data/latest/auction_features.csv")
 
     out = daily.copy()
     out["ts_code"] = out["ts_code"].astype(str).str.strip()
@@ -263,11 +266,20 @@ def build_from_latest_data() -> pd.DataFrame:
             c for c in [
                 "ts_code", "limit_touch_count", "open_board_count", "limitup_quality_score",
                 "intraday_risk_score", "late_volume_ratio", "late_price_weakness",
-                "max_drawdown_after_limit", "intraday_vwap_position",
+                "late_price_change_pct", "max_drawdown_after_limit", "intraday_vwap_position",
             ]
             if c in intraday.columns
         ]
         out = out.merge(intraday[keep].drop_duplicates("ts_code"), on="ts_code", how="left")
+    if not auction_features.empty and "ts_code" in auction_features.columns:
+        keep = [
+            c for c in [
+                "ts_code", "auction_price", "auction_vol", "auction_amount",
+                "auction_pct_chg", "auction_amount_ratio", "auction_strength_score",
+            ]
+            if c in auction_features.columns
+        ]
+        out = out.merge(auction_features[keep].drop_duplicates("ts_code"), on="ts_code", how="left")
 
     close = to_num(out, "close")
     pct_chg = to_num(out, "pct_chg")
@@ -300,7 +312,8 @@ def build_from_latest_data() -> pd.DataFrame:
     out["gap_open_pct"] = np.where(to_num(out, "pre_close") > 0, (to_num(out, "open") / to_num(out, "pre_close") - 1) * 100, 0)
     out["amplitude"] = np.where(to_num(out, "pre_close") > 0, (to_num(out, "high") - to_num(out, "low")) / to_num(out, "pre_close") * 100, 0)
     out["late_pullback_pct"] = to_num(out, "max_drawdown_after_limit", np.nan).fillna(out["intraday_pullback_pct"])
-    out["late_price_change_pct"] = -to_num(out, "late_price_weakness", 0)
+    out["late_price_change_pct"] = to_num(out, "late_price_change_pct", np.nan)
+    out["late_price_change_pct"] = out["late_price_change_pct"].where(out["late_price_change_pct"].notna(), -to_num(out, "late_price_weakness", 0))
     out["late_volume_ratio"] = to_num(out, "late_volume_ratio", 1)
     typical_price = (to_num(out, "high") + to_num(out, "low") + close) / 3
     out["intraday_vwap_position"] = to_num(out, "intraday_vwap_position", np.nan)
@@ -360,6 +373,12 @@ def build_from_latest_data() -> pd.DataFrame:
     out["sector_hot_score"] = to_num(out, "sector_hot_score", 0).clip(0, 100)
     out["announcement_flag"] = to_num(out, "announcement_flag", 0)
     out["hot_topic_flag"] = to_num(out, "hot_topic_flag", 0)
+    out["auction_price"] = to_num(out, "auction_price", 0)
+    out["auction_vol"] = to_num(out, "auction_vol", 0)
+    out["auction_amount"] = to_num(out, "auction_amount", 0)
+    out["auction_pct_chg"] = to_num(out, "auction_pct_chg", 0)
+    out["auction_amount_ratio"] = to_num(out, "auction_amount_ratio", 0)
+    out["auction_strength_score"] = to_num(out, "auction_strength_score", 0).clip(0, 100)
     required_core = ["ts_code", "close", "pre_close", "pct_chg", "amount", "today_limit_up_price"]
     out["data_quality_flag"] = np.where(out[required_core].isna().any(axis=1), 1, 0)
     out.loc[(to_num(out, "close") <= 0) | (to_num(out, "pre_close") <= 0) | (to_num(out, "amount") <= 0) | (to_num(out, "today_limit_up_price") <= 0), "data_quality_flag"] = 1

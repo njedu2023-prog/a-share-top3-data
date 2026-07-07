@@ -163,7 +163,10 @@ def _intraday_feature_columns() -> List[str]:
         "reseal_minutes_avg",
         "reseal_speed_score",
         "reseal_acceptance_score",
+        "intraday_vwap",
+        "intraday_vwap_position",
         "late_volume_ratio",
+        "late_price_change_pct",
         "late_price_weakness",
         "late_limit_hold_minutes",
         "late_withdraw_score",
@@ -176,6 +179,19 @@ def _intraday_feature_columns() -> List[str]:
 
 def _auction_columns() -> List[str]:
     return ["ts_code", "trade_date", "vol", "price", "amount"]
+
+
+def _auction_feature_columns() -> List[str]:
+    return [
+        "ts_code",
+        "trade_date",
+        "auction_price",
+        "auction_vol",
+        "auction_amount",
+        "auction_pct_chg",
+        "auction_amount_ratio",
+        "auction_strength_score",
+    ]
 
 
 def _limit_stage_columns() -> List[str]:
@@ -974,16 +990,45 @@ def _read_symbol_priority(path: Path) -> List[str]:
 def build_intraday_universe(day_dir: Path) -> List[str]:
     """
     候选池优先级：
-    limit_list_d -> limit_break_d -> top_list，去重后保持顺序。
+    wp_pre_candidates -> limit_list_d -> limit_break_d -> top_list，去重后保持顺序。
     """
     out: List[str] = []
     seen = set()
-    for name in ("limit_list_d.csv", "limit_break_d.csv", "top_list.csv"):
+    for name in ("wp_pre_candidates.csv", "limit_list_d.csv", "limit_break_d.csv", "top_list.csv"):
         for code in _read_symbol_priority(day_dir / name):
             if code and code not in seen:
                 seen.add(code)
                 out.append(code)
     return out
+
+
+def build_wp_pre_candidates(
+    trade_date: str,
+    base_raw: Path,
+    base_latest: Path,
+    dfs: Dict[str, pd.DataFrame],
+    *,
+    min_pct_chg: float = 6.0,
+) -> List[str]:
+    daily = dfs.get("daily", pd.DataFrame())
+    limit_list = dfs.get("limit_list_d", pd.DataFrame())
+    if daily is None or daily.empty or "ts_code" not in daily.columns:
+        save_df(pd.DataFrame(columns=["ts_code", "trade_date", "pct_chg"]), base_raw / "wp_pre_candidates.csv", columns=["ts_code", "trade_date", "pct_chg"])
+        save_df(pd.DataFrame(columns=["ts_code", "trade_date", "pct_chg"]), base_latest / "wp_pre_candidates.csv", columns=["ts_code", "trade_date", "pct_chg"])
+        return []
+    work = daily.copy()
+    work["ts_code"] = work["ts_code"].map(_norm_ts_code)
+    pct = _to_num(work["pct_chg"]) if "pct_chg" in work.columns else pd.Series([0] * len(work), index=work.index)
+    current_limit = set()
+    if limit_list is not None and not limit_list.empty and "ts_code" in limit_list.columns:
+        current_limit = set(limit_list["ts_code"].map(_norm_ts_code).tolist())
+    out = work.loc[(pct > min_pct_chg) & (~work["ts_code"].isin(current_limit)), ["ts_code"]].copy()
+    out.insert(1, "trade_date", trade_date)
+    out["pct_chg"] = pct.loc[out.index]
+    out = out.drop_duplicates("ts_code")
+    save_df(out, base_raw / "wp_pre_candidates.csv", columns=["ts_code", "trade_date", "pct_chg"])
+    save_df(out, base_latest / "wp_pre_candidates.csv", columns=["ts_code", "trade_date", "pct_chg"])
+    return out["ts_code"].tolist()
 
 
 def fetch_auction(pro, trade_date: str, symbols: Optional[List[str]] = None) -> Tuple[pd.DataFrame, Dict[str, Any]]:
@@ -1018,18 +1063,58 @@ def fetch_auction(pro, trade_date: str, symbols: Optional[List[str]] = None) -> 
     }
 
 
+def build_auction_features(
+    auction_df: pd.DataFrame,
+    daily_df: pd.DataFrame,
+    trade_date: str,
+) -> pd.DataFrame:
+    columns = _auction_feature_columns()
+    if auction_df is None or auction_df.empty or "ts_code" not in auction_df.columns:
+        return pd.DataFrame(columns=columns)
+    auction = auction_df.copy()
+    auction["ts_code"] = auction["ts_code"].map(_norm_ts_code)
+    if "trade_date" not in auction.columns:
+        auction["trade_date"] = trade_date
+    auction["auction_price"] = _to_num(auction["price"]) if "price" in auction.columns else pd.NA
+    auction["auction_vol"] = _to_num(auction["vol"]) if "vol" in auction.columns else 0
+    auction["auction_amount"] = _to_num(auction["amount"]) if "amount" in auction.columns else 0
+
+    base = pd.DataFrame()
+    if daily_df is not None and not daily_df.empty and "ts_code" in daily_df.columns:
+        keep = [c for c in ["ts_code", "pre_close", "amount"] if c in daily_df.columns]
+        base = daily_df[keep].copy()
+        base["ts_code"] = base["ts_code"].map(_norm_ts_code)
+    out = auction[["ts_code", "trade_date", "auction_price", "auction_vol", "auction_amount"]].drop_duplicates("ts_code")
+    if not base.empty:
+        out = out.merge(base.drop_duplicates("ts_code"), on="ts_code", how="left")
+    pre_close = _to_num(out["pre_close"]) if "pre_close" in out.columns else pd.Series([0] * len(out), index=out.index)
+    day_amount = _to_num(out["amount"]) if "amount" in out.columns else pd.Series([0] * len(out), index=out.index)
+    out["auction_pct_chg"] = (out["auction_price"] / pre_close.replace(0, pd.NA) - 1) * 100
+    out["auction_amount_ratio"] = out["auction_amount"] / day_amount.replace(0, pd.NA)
+    out["auction_strength_score"] = (
+        out["auction_pct_chg"].fillna(0).clip(-5, 10) * 6
+        + out["auction_amount_ratio"].fillna(0).clip(0, 0.25) * 180
+    ).clip(0, 100)
+    return out.reindex(columns=columns)
+
+
 def fetch_minute_for_symbol(
     pro,
     ts_code: str,
     trade_date: str,
     freq: str = "1min",
+    end_dt: Optional[datetime] = None,
 ) -> Tuple[pd.DataFrame, Dict[str, Any]]:
     day = _trade_date_dash(trade_date)
+    if end_dt is None:
+        end_text = f"{day} 15:00:00"
+    else:
+        end_text = end_dt.strftime("%Y-%m-%d %H:%M:%S")
     fields = "ts_code,trade_time,open,high,low,close,vol,amount"
     params = {
         "ts_code": ts_code,
         "start_date": f"{day} 09:30:00",
-        "end_date": f"{day} 15:00:00",
+        "end_date": end_text,
         "freq": freq,
     }
     df, info = safe_query(pro, "stk_mins", fields=fields, **params)
@@ -1085,7 +1170,10 @@ def _empty_intraday_row(ts_code: str, trade_date: str, minute_freq: str) -> Dict
         "reseal_minutes_avg": "",
         "reseal_speed_score": 0.0,
         "reseal_acceptance_score": 0.0,
+        "intraday_vwap": "",
+        "intraday_vwap_position": "",
         "late_volume_ratio": "",
+        "late_price_change_pct": "",
         "late_price_weakness": "",
         "late_limit_hold_minutes": 0,
         "late_withdraw_score": 0.0,
@@ -1123,6 +1211,27 @@ def _build_one_intraday_feature(
     high = _to_num(work["high"]) if "high" in work.columns else close
     low = _to_num(work["low"]) if "low" in work.columns else close
     vol = _to_num(work["vol"]) if "vol" in work.columns else pd.Series([0] * len(work), index=work.index)
+    amount = _to_num(work["amount"]) if "amount" in work.columns else pd.Series([0] * len(work), index=work.index)
+    last_close = float(close.dropna().iloc[-1]) if not close.dropna().empty else float("nan")
+    total_vol = float(vol.fillna(0).sum())
+    total_amount = float(amount.fillna(0).sum())
+    intraday_vwap = total_amount / total_vol if total_vol > 0 and total_amount > 0 else float("nan")
+    if pd.isna(intraday_vwap) or intraday_vwap <= 0:
+        typical = ((high + low + close) / 3).dropna()
+        intraday_vwap = float(typical.mean()) if not typical.empty else float("nan")
+    row["intraday_vwap"] = round(intraday_vwap, 4) if not pd.isna(intraday_vwap) else ""
+    row["intraday_vwap_position"] = round((last_close / intraday_vwap - 1) * 100, 4) if intraday_vwap and not pd.isna(intraday_vwap) and intraday_vwap > 0 else ""
+
+    late_mask_all = work["_dt"].dt.strftime("%H:%M:%S") >= "14:30:00"
+    late_all = work[late_mask_all].copy()
+    late_vol_all = float(_to_num(late_all["vol"]).fillna(0).sum()) if (not late_all.empty and "vol" in late_all.columns) else 0.0
+    row["late_volume_ratio"] = round(late_vol_all / total_vol, 6) if total_vol > 0 else 0.0
+    if not late_all.empty and "close" in late_all.columns:
+        late_close_series = _to_num(late_all["close"]).dropna()
+        if not late_close_series.empty:
+            first_late = float(late_close_series.iloc[0])
+            last_late = float(late_close_series.iloc[-1])
+            row["late_price_change_pct"] = round((last_late / first_late - 1) * 100, 4) if first_late > 0 else ""
 
     eps_abs = float(os.getenv("LIMIT_UP_EPS_ABS", "1e-6"))
     eps_rel = float(os.getenv("LIMIT_UP_EPS_REL", "1e-6"))
@@ -1133,7 +1242,6 @@ def _build_one_intraday_feature(
     row["minute_rows"] = int(len(work))
     row["has_minute_data"] = 1
     if not hit_positions:
-        row["late_volume_ratio"] = 0.0
         row["late_price_weakness"] = ""
         row["intraday_risk_score"] = 80.0
         row["intraday_tag"] = "no_limit_touch"
@@ -1179,7 +1287,6 @@ def _build_one_intraday_feature(
 
     late_mask = work["_dt"].dt.strftime("%H:%M:%S") >= "14:30:00"
     late = work[late_mask].copy()
-    total_vol = float(vol.fillna(0).sum())
     late_vol = float(_to_num(late["vol"]).fillna(0).sum()) if (not late.empty and "vol" in late.columns) else 0.0
     late_volume_ratio = late_vol / total_vol if total_vol > 0 else 0.0
     late_last_close = float(_to_num(late["close"]).dropna().iloc[-1]) if (not late.empty and "close" in late.columns and not _to_num(late["close"]).dropna().empty) else float(close.dropna().iloc[-1])
@@ -1239,6 +1346,7 @@ def _build_one_intraday_feature(
             "reseal_speed_score": round(reseal_speed, 4),
             "reseal_acceptance_score": round(reseal_acceptance, 4),
             "late_volume_ratio": round(late_volume_ratio, 6),
+            "late_price_change_pct": row.get("late_price_change_pct", ""),
             "late_price_weakness": round(late_price_weakness, 4),
             "late_limit_hold_minutes": int(late_limit_hold_minutes),
             "late_withdraw_score": round(late_withdraw, 4),
@@ -1282,17 +1390,34 @@ def run_intraday_upgrade(
 ) -> None:
     enable_auction = _env_bool("ENABLE_AUCTION", "1")
     enable_minute = _env_bool("ENABLE_MINUTE", "1")
+    realtime_minute_only = _env_bool("REALTIME_MINUTE_ONLY", "1")
     minute_freq = os.getenv("MINUTE_FREQ", "1min").strip() or "1min"
     max_symbols = max(0, _env_int("MAX_MINUTE_SYMBOLS", 80))
 
+    wp_symbols = build_wp_pre_candidates(
+        trade_date,
+        base_raw,
+        base_latest,
+        dfs,
+        min_pct_chg=float(os.getenv("WP_INTRADAY_MIN_PCT", "6")),
+    )
     symbols = build_intraday_universe(base_raw)[:max_symbols]
     limit_map = _limit_price_map(dfs.get("stk_limit", pd.DataFrame()))
+    now = bj_now()
+    is_today = trade_date == now.strftime("%Y%m%d")
+    before_minute_open = is_today and now.strftime("%H:%M:%S") < "09:30:00"
+    minute_end_dt: Optional[datetime] = None
+    if is_today and not before_minute_open:
+        minute_end_dt = min(now, datetime.strptime(f"{trade_date}150000", "%Y%m%d%H%M%S").replace(tzinfo=BJ_TZ))
 
     meta["auction"] = {"enabled": enable_auction, "ok": False, "rows": 0, "columns": [], "error": ""}
     meta["minute"] = {
         "enabled": enable_minute,
+        "realtime_only": realtime_minute_only,
         "ok": False,
         "freq": minute_freq,
+        "wp_pre_candidates": int(len(wp_symbols)),
+        "minute_end": minute_end_dt.strftime("%Y-%m-%d %H:%M:%S") if minute_end_dt else "",
         "symbols_requested": int(len(symbols)) if enable_minute else 0,
         "symbols_success": 0,
         "symbols_failed": 0,
@@ -1305,10 +1430,14 @@ def run_intraday_upgrade(
             auction_df, auction_info = fetch_auction(pro, trade_date, symbols=symbols)
             save_df(auction_df, base_raw / "stk_auction.csv", columns=list(auction_df.columns) or _auction_columns())
             save_df(auction_df, base_latest / "stk_auction.csv", columns=list(auction_df.columns) or _auction_columns())
+            auction_features = build_auction_features(auction_df, dfs.get("daily", pd.DataFrame()), trade_date)
+            save_df(auction_features, base_raw / "auction_features.csv", columns=_auction_feature_columns())
+            save_df(auction_features, base_latest / "auction_features.csv", columns=_auction_feature_columns())
             meta["auction"].update(
                 {
                     "ok": bool(auction_info.get("ok", False)),
                     "rows": int(len(auction_df)),
+                    "feature_rows": int(len(auction_features)),
                     "columns": [str(c) for c in auction_df.columns],
                     "error": auction_info.get("error", ""),
                 }
@@ -1319,11 +1448,15 @@ def run_intraday_upgrade(
             meta["auction"]["error"] = repr(e)
             save_df(pd.DataFrame(), base_raw / "stk_auction.csv", columns=_auction_columns())
             save_df(pd.DataFrame(), base_latest / "stk_auction.csv", columns=_auction_columns())
+            save_df(pd.DataFrame(), base_raw / "auction_features.csv", columns=_auction_feature_columns())
+            save_df(pd.DataFrame(), base_latest / "auction_features.csv", columns=_auction_feature_columns())
             print(f"[AUCTION-FAILED] err={repr(e)}")
             print(traceback.format_exc())
     else:
         save_df(pd.DataFrame(), base_raw / "stk_auction.csv", columns=_auction_columns())
         save_df(pd.DataFrame(), base_latest / "stk_auction.csv", columns=_auction_columns())
+        save_df(pd.DataFrame(), base_raw / "auction_features.csv", columns=_auction_feature_columns())
+        save_df(pd.DataFrame(), base_latest / "auction_features.csv", columns=_auction_feature_columns())
 
     minute_frames: Dict[str, pd.DataFrame] = {}
     raw_minute_dir = base_raw / "minute" / minute_freq
@@ -1331,10 +1464,19 @@ def run_intraday_upgrade(
     ensure_dir(raw_minute_dir)
     _clear_csv_dir(latest_minute_dir)
 
-    if enable_minute and symbols:
+    if enable_minute and realtime_minute_only and (not is_today or before_minute_open):
+        meta["minute"]["ok"] = True
+        if not is_today:
+            meta["minute"]["skip_reason"] = f"REALTIME_MINUTE_ONLY enabled; trade_date {trade_date} is not today {now:%Y%m%d}"
+        else:
+            meta["minute"]["skip_reason"] = "REALTIME_MINUTE_ONLY enabled; skip stk_mins before 09:30 Beijing time"
+        for ts_code in symbols:
+            save_df(pd.DataFrame(columns=_minute_columns()), raw_minute_dir / f"{ts_code}.csv", columns=_minute_columns())
+        _clear_csv_dir(latest_minute_dir)
+    elif enable_minute and symbols:
         for ts_code in symbols:
             try:
-                df, info = fetch_minute_for_symbol(pro, ts_code, trade_date, minute_freq)
+                df, info = fetch_minute_for_symbol(pro, ts_code, trade_date, minute_freq, end_dt=minute_end_dt)
                 minute_frames[ts_code] = df
                 save_df(df, raw_minute_dir / f"{ts_code}.csv", columns=list(df.columns) or _minute_columns())
                 save_df(df, latest_minute_dir / f"{ts_code}.csv", columns=list(df.columns) or _minute_columns())
