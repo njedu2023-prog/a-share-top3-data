@@ -1,7 +1,7 @@
 {
-  "requested_trade_date": "20260706",
-  "resolved_trade_date": "20260706",
-  "generated_at_bj": "2026-07-06 22:34:06",
+  "requested_trade_date": null,
+  "resolved_trade_date": "20260707",
+  "generated_at_bj": "2026-07-07 11:59:32",
   "jobs": [
     {
       "key": "limit_list_d",
@@ -9,11 +9,11 @@
       "allow_empty": true,
       "required": false,
       "kwargs": {
-        "trade_date": "20260706",
+        "trade_date": "20260707",
         "fields": "trade_date,ts_code,name,limit_type,close,up_limit,down_limit,open_times,fd_amount,first_time,last_time,limit_times,up_stat,industry,turnover_ratio,amount,float_mv,total_mv"
       },
-      "status": "ok",
-      "rows": 151,
+      "status": "ok_empty",
+      "rows": 0,
       "error": null
     },
     {
@@ -22,7 +22,7 @@
       "allow_empty": true,
       "required": false,
       "kwargs": {
-        "trade_date": "20260706",
+        "trade_date": "20260707",
         "fields": "trade_date,ts_code,name,open_times,first_time,last_time,fd_amount"
       },
       "status": "ok_empty",
@@ -35,11 +35,11 @@
       "allow_empty": true,
       "required": false,
       "kwargs": {
-        "trade_date": "20260706",
-        "fields": "ts_code,trade_date,open,high,low,close,vol,amount,pct_chg"
+        "trade_date": "20260707",
+        "fields": "ts_code,trade_date,open,high,low,close,pre_close,vol,amount,pct_chg"
       },
-      "status": "ok",
-      "rows": 5517,
+      "status": "ok_empty",
+      "rows": 0,
       "error": null
     },
     {
@@ -48,11 +48,11 @@
       "allow_empty": true,
       "required": false,
       "kwargs": {
-        "trade_date": "20260706",
+        "trade_date": "20260707",
         "fields": "ts_code,trade_date,up_limit,down_limit"
       },
       "status": "ok",
-      "rows": 7678,
+      "rows": 7679,
       "error": null
     },
     {
@@ -61,11 +61,11 @@
       "allow_empty": true,
       "required": false,
       "kwargs": {
-        "trade_date": "20260706",
+        "trade_date": "20260707",
         "fields": "ts_code,trade_date,turnover_rate,turnover_rate_f,volume_ratio,total_mv,float_mv"
       },
-      "status": "ok",
-      "rows": 5595,
+      "status": "ok_empty",
+      "rows": 0,
       "error": null
     },
     {
@@ -88,12 +88,12 @@
       "allow_empty": true,
       "required": false,
       "kwargs": {
-        "start_date": "20260606",
-        "end_date": "20260706",
+        "start_date": "20260607",
+        "end_date": "20260707",
         "fields": "ts_code,name,start_date,end_date,change_reason"
       },
       "status": "ok",
-      "rows": 52,
+      "rows": 51,
       "error": null
     },
     {
@@ -102,10 +102,10 @@
       "allow_empty": true,
       "required": false,
       "kwargs": {
-        "trade_date": "20260706"
+        "trade_date": "20260707"
       },
-      "status": "ok",
-      "rows": 95,
+      "status": "ok_empty",
+      "rows": 0,
       "error": null
     },
     {
@@ -114,10 +114,10 @@
       "allow_empty": true,
       "required": false,
       "kwargs": {
-        "trade_date": "20260706"
+        "trade_date": "20260707"
       },
-      "status": "ok",
-      "rows": 1,
+      "status": "ok_empty",
+      "rows": 0,
       "error": null
     }
   ],
@@ -146,33 +146,33 @@
     },
     "limit_list_d_policy": {
       "policy": "CLOSE_EQ_UP_LIMIT",
-      "trade_date": "20260706",
-      "input_rows": 151,
-      "output_rows": 66,
+      "trade_date": "20260707",
+      "input_rows": 0,
+      "output_rows": 0,
       "used_daily_close": 0,
-      "used_stk_limit": 1,
-      "filled_up_limit": 151,
-      "filled_down_limit": 151,
-      "warn": ""
+      "used_stk_limit": 0,
+      "filled_up_limit": 0,
+      "filled_down_limit": 0,
+      "warn": "limit_list_d missing ts_code or empty"
     },
     "limit_stage": {
-      "source": "limit_list_d.limit_times",
-      "limit_list_rows": 66,
-      "limit_step_rows": 13,
-      "rows": 66,
-      "limit_times_nonnull": 64,
-      "missing_reason": ""
+      "source": "",
+      "limit_list_rows": 0,
+      "limit_step_rows": 0,
+      "rows": 0,
+      "limit_times_nonnull": 0,
+      "missing_reason": "limit_list_d_empty_or_missing_ts_code"
     },
     "hot_board_tags": {
       "hot_board_topn": 10,
-      "hot_boards": 10,
-      "tagged": 66
+      "hot_boards": 0,
+      "tagged": 0
     }
   },
   "limit_step": {
     "ok": true,
     "api_name": "limit_step",
-    "rows": 13,
+    "rows": 0,
     "columns": [
       "trade_date",
       "ts_code",
@@ -183,7 +183,7 @@
   "auction": {
     "enabled": true,
     "ok": true,
-    "rows": 5515,
+    "rows": 5516,
     "columns": [
       "ts_code",
       "trade_date",
@@ -191,20 +191,32 @@
       "price",
       "amount"
     ],
-    "error": ""
+    "error": "",
+    "feature_rows": 5516
   },
   "minute": {
     "enabled": true,
+    "realtime_only": true,
+    "market_minute_scan": true,
+    "realtime_quote": {
+      "ok": true,
+      "rows": 6000,
+      "chunks": 20,
+      "error": ""
+    },
     "ok": true,
     "freq": "1min",
-    "symbols_requested": 80,
-    "symbols_success": 80,
-    "symbols_failed": 0,
-    "errors": []
+    "wp_pre_candidates": 0,
+    "minute_end": "2026-07-07 12:02:35",
+    "symbols_requested": 91,
+    "symbols_success": 0,
+    "symbols_failed": 91,
+    "errors": [],
+    "fallback_symbol_query_count": 91
   },
   "intraday_features": {
     "ok": true,
-    "rows": 80,
+    "rows": 91,
     "columns": [
       "ts_code",
       "trade_date",
@@ -220,7 +232,10 @@
       "reseal_minutes_avg",
       "reseal_speed_score",
       "reseal_acceptance_score",
+      "intraday_vwap",
+      "intraday_vwap_position",
       "late_volume_ratio",
+      "late_price_change_pct",
       "late_price_weakness",
       "late_limit_hold_minutes",
       "late_withdraw_score",
@@ -230,5 +245,26 @@
       "intraday_tag"
     ],
     "error": ""
+  },
+  "realtime_snapshot": {
+    "ok": true,
+    "rows": 6000,
+    "columns": [
+      "ts_code",
+      "trade_date",
+      "update_time",
+      "price",
+      "open",
+      "high",
+      "low",
+      "close",
+      "pre_close",
+      "pct_chg",
+      "vol",
+      "amount",
+      "realtime_source"
+    ],
+    "error": "",
+    "fallback": "realtime_quote"
   }
 }
