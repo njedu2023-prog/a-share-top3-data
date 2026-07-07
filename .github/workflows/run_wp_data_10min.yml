@@ -10,7 +10,9 @@ on:
       - scripts/wp/wp_pipeline.py
       - .github/workflows/run_wp_data_10min.yml
   schedule:
-    - cron: "*/10 * * * 1-5"
+    # Avoid exact 00/10/20 minute boundaries where GitHub schedule runs are often delayed or dropped.
+    # Beijing time: 09:31, 09:41, ...; guarded again by the A-share calendar/time check below.
+    - cron: "1-59/10 * * * 1-5"
 
 permissions:
   contents: write
