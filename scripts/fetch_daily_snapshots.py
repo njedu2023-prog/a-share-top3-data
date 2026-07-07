@@ -1600,6 +1600,24 @@ def build_realtime_snapshot(
     return out
 
 
+def build_quote_realtime_snapshot(quote_df: pd.DataFrame, trade_date: str) -> pd.DataFrame:
+    if quote_df is None or quote_df.empty or "ts_code" not in quote_df.columns:
+        return pd.DataFrame(columns=_realtime_snapshot_columns())
+    out = quote_df.copy()
+    out["ts_code"] = out["ts_code"].map(_norm_ts_code)
+    out["trade_date"] = trade_date
+    out["price"] = _to_num(out["price"]) if "price" in out.columns else 0
+    out["close"] = out["price"]
+    for col in ["open", "high", "low", "pre_close", "pct_chg", "vol", "amount"]:
+        out[col] = _to_num(out[col]) if col in out.columns else pd.NA
+    if "update_time" not in out.columns:
+        out["update_time"] = bj_now().strftime("%Y-%m-%d %H:%M:%S")
+    out["realtime_source"] = "realtime_quote_fallback"
+    out = out[out["ts_code"] != ""].drop_duplicates("ts_code")
+    out = out.sort_values(["pct_chg", "amount"], ascending=[False, False], na_position="last").reset_index(drop=True)
+    return out.reindex(columns=_realtime_snapshot_columns())
+
+
 def run_intraday_upgrade(
     pro,
     trade_date: str,
@@ -1769,6 +1787,9 @@ def run_intraday_upgrade(
             trade_date=trade_date,
             dfs=dfs,
         )
+        if realtime_snapshot.empty and not quote_df.empty:
+            realtime_snapshot = build_quote_realtime_snapshot(quote_df, trade_date)
+            meta["realtime_snapshot"]["fallback"] = "realtime_quote"
         save_df(realtime_snapshot, base_raw / "realtime_snapshot.csv", columns=_realtime_snapshot_columns())
         save_df(realtime_snapshot, base_latest / "realtime_snapshot.csv", columns=_realtime_snapshot_columns())
         meta["realtime_snapshot"].update({"ok": True, "rows": int(len(realtime_snapshot)), "error": ""})

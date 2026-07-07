@@ -37,15 +37,16 @@ def request(method: str, url: str, token: str, payload: dict | None = None) -> d
 
 
 def iter_files(paths: list[str]):
+    cwd = Path.cwd().resolve()
     for raw_path in paths:
-        root = Path(raw_path)
+        root = Path(raw_path).resolve()
         if not root.exists():
             continue
         candidates = [root] if root.is_file() else sorted(root.rglob("*"))
         for path in candidates:
             if not path.is_file():
                 continue
-            rel = path.relative_to(Path.cwd())
+            rel = path.resolve().relative_to(cwd)
             if any(part in IGNORE_PARTS for part in rel.parts):
                 continue
             if path.suffix in IGNORE_SUFFIXES:
