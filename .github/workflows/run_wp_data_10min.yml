@@ -10,12 +10,16 @@ on:
       - scripts/wp/wp_pipeline.py
       - .github/workflows/run_wp_data_10min.yml
   schedule:
-    # Avoid exact 00/10/20 minute boundaries where GitHub schedule runs are often delayed or dropped.
-    # Beijing time: 09:31, 09:41, ...; guarded again by the A-share calendar/time check below.
-    - cron: "1-59/10 * * * 1-5"
+    # Check every 5 minutes during weekdays. The Python guard below enforces
+    # the A-share calendar/window and skips when WP data is still fresh.
+    - cron: "1,6,11,16,21,26,31,36,41,46,51,56 * * * 1-5"
 
 permissions:
   contents: write
+
+concurrency:
+  group: wp-data-10min
+  cancel-in-progress: false
 
 jobs:
   wp-data:
@@ -37,7 +41,9 @@ jobs:
         run: |
           python - <<'PY'
           import os
+          import csv
           from datetime import datetime, time
+          from pathlib import Path
           from zoneinfo import ZoneInfo
 
           import tushare as ts
@@ -56,12 +62,46 @@ jobs:
               with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as handle:
                   handle.write("RUN_WP=0\n")
               raise SystemExit(0)
+
+          fresh_minutes = float(os.environ.get("WP_FRESH_MINUTES", "8"))
+          candidates = [
+              Path(f"data/wp/reports_input/{today[:4]}/{today}/wp_rank_input.csv"),
+              Path("data/wp/latest/wp_latest_rank_input.csv"),
+          ]
+          latest_time = None
+          for path in candidates:
+              if not path.exists():
+                  continue
+              with path.open("r", encoding="utf-8-sig", newline="") as handle:
+                  for row in csv.DictReader(handle):
+                      if row.get("trade_date") != today:
+                          continue
+                      raw_time = (row.get("update_time") or "").strip()
+                      if not raw_time:
+                          continue
+                      try:
+                          parsed = datetime.strptime(raw_time, "%Y%m%d %H:%M:%S")
+                      except ValueError:
+                          continue
+                      if latest_time is None or parsed > latest_time:
+                          latest_time = parsed
+              if latest_time is not None:
+                  break
+
+          if latest_time is not None:
+              age_minutes = (now.replace(tzinfo=None) - latest_time).total_seconds() / 60
+              if age_minutes < fresh_minutes:
+                  print(f"Skip because WP data is fresh: latest={latest_time:%Y-%m-%d %H:%M:%S}, age={age_minutes:.1f}m < {fresh_minutes:.1f}m")
+                  with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as handle:
+                      handle.write("RUN_WP=0\n")
+                  raise SystemExit(0)
           print(f"Run window ok by Tushare trade_cal: {now:%Y-%m-%d %H:%M:%S}")
           with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as handle:
               handle.write("RUN_WP=1\n")
           PY
         env:
           TUSHARE_TOKEN: ${{ secrets.TUSHARE_TOKEN }}
+          WP_FRESH_MINUTES: "8"
       - name: Refresh Tushare realtime source
         if: env.RUN_WP != '0'
         run: python scripts/fetch_daily_snapshots.py
@@ -83,3 +123,33 @@ jobs:
         run: python scripts/wp/github_commit_paths.py "Update WP data" data/wp data/latest
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Trigger WP downstream
+        if: env.RUN_WP != '0'
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from urllib.request import Request, urlopen
+
+          token = os.environ.get("ORCHESTRATOR_TOKEN", "").strip()
+          if not token:
+              print("Skip downstream trigger: ORCHESTRATOR_TOKEN is not configured.")
+              raise SystemExit(0)
+
+          body = json.dumps({"ref": "main", "inputs": {"mode": "live"}}).encode("utf-8")
+          req = Request(
+              "https://api.github.com/repos/njedu2023-prog/WP/actions/workflows/run_wp_10min.yml/dispatches",
+              data=body,
+              method="POST",
+              headers={
+                  "Authorization": f"Bearer {token}",
+                  "Accept": "application/vnd.github+json",
+                  "X-GitHub-Api-Version": "2022-11-28",
+                  "Content-Type": "application/json",
+              },
+          )
+          with urlopen(req, timeout=30) as resp:
+              print(f"Triggered WP downstream workflow: HTTP {resp.status}")
+          PY
+        env:
+          ORCHESTRATOR_TOKEN: ${{ secrets.ORCHESTRATOR_TOKEN }}
