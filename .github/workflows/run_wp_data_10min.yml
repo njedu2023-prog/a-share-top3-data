@@ -129,6 +129,7 @@ jobs:
           python - <<'PY'
           import json
           import os
+          from urllib.error import HTTPError, URLError
           from urllib.request import Request, urlopen
 
           token = os.environ.get("ORCHESTRATOR_TOKEN", "").strip()
@@ -148,8 +149,16 @@ jobs:
                   "Content-Type": "application/json",
               },
           )
-          with urlopen(req, timeout=30) as resp:
-              print(f"Triggered WP downstream workflow: HTTP {resp.status}")
+          try:
+              with urlopen(req, timeout=30) as resp:
+                  print(f"Triggered WP downstream workflow: HTTP {resp.status}")
+          except HTTPError as exc:
+              body = exc.read().decode("utf-8", errors="replace")
+              print(f"WARNING: downstream trigger failed: HTTP {exc.code} {body}")
+              raise SystemExit(0)
+          except URLError as exc:
+              print(f"WARNING: downstream trigger failed: {exc}")
+              raise SystemExit(0)
           PY
         env:
           ORCHESTRATOR_TOKEN: ${{ secrets.ORCHESTRATOR_TOKEN }}
