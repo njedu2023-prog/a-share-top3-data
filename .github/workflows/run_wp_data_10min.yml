@@ -78,6 +78,6 @@ jobs:
         run: python scripts/wp/wp_pipeline.py
       - name: Commit WP data through GitHub API
         if: env.RUN_WP != '0'
-        run: python scripts/wp/github_commit_paths.py "Update WP data" data/wp
+        run: python scripts/wp/github_commit_paths.py "Update WP data" data/wp data/latest
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
