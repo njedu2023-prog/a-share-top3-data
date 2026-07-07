@@ -18,6 +18,7 @@ permissions:
 jobs:
   wp-data:
     runs-on: ubuntu-latest
+    timeout-minutes: 8
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -68,6 +69,8 @@ jobs:
           ENABLE_MINUTE: "1"
           REALTIME_MINUTE_ONLY: "1"
           ENABLE_MARKET_MINUTE_SCAN: "1"
+          TRY_FULL_MARKET_MINUTE: "0"
+          REALTIME_QUOTE_CHUNK_SIZE: "300"
           MINUTE_FREQ: "1min"
           MAX_MINUTE_SYMBOLS: "6000"
       - name: Build WP data chain

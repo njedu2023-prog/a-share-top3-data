@@ -1719,7 +1719,7 @@ def run_intraday_upgrade(
             save_df(pd.DataFrame(columns=_minute_columns()), raw_minute_dir / f"{ts_code}.csv", columns=_minute_columns())
         _clear_csv_dir(latest_minute_dir)
     elif enable_minute and symbols:
-        if enable_market_minute_scan:
+        if enable_market_minute_scan and _env_bool("TRY_FULL_MARKET_MINUTE", "0"):
             try:
                 market_df, market_info = fetch_market_minutes(pro, trade_date, minute_freq, end_dt=minute_end_dt)
                 meta["minute"]["market_query"] = market_info
