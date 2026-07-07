@@ -23,6 +23,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+      - name: Initialize run flag
+        run: echo "RUN_WP=1" >> "$GITHUB_ENV"
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
