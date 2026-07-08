@@ -11,9 +11,10 @@ on:
       - scripts/wp/run_wp_data_session.py
       - .github/workflows/run_wp_data_10min.yml
   schedule:
-    # Beijing time startup guards: 09:05/09:15/09:25 and 12:35/12:45/12:55.
-    # The runner then loops every 10 minutes inside the A-share trading window.
+    # Beijing time startup guards. The runner stays alive across the lunch break
+    # and loops every 10 minutes until the A-share close window ends.
     - cron: "5,15,25 1 * * 1-5"
+    # Afternoon fallback only, in case all morning startup guards were delayed or dropped.
     - cron: "35,45,55 4 * * 1-5"
 
 permissions:
@@ -21,12 +22,12 @@ permissions:
 
 concurrency:
   group: wp-data-session-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   wp-data:
     runs-on: ubuntu-latest
-    timeout-minutes: 220
+    timeout-minutes: 390
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
