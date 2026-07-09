@@ -35,6 +35,11 @@ def today_window(now: datetime) -> tuple[datetime, datetime, datetime, datetime]
     return None
 
 
+def in_run_window(now: datetime) -> bool:
+    current = now.time()
+    return (RUN_START <= current <= LUNCH_START) or (LUNCH_END <= current <= RUN_END)
+
+
 def is_trade_day(token: str, day: str) -> bool:
     ts.set_token(token)
     pro = ts.pro_api()
@@ -60,6 +65,26 @@ def run_once() -> None:
         check=True,
         env=env,
     )
+
+
+def run_once_if_due() -> None:
+    token = os.environ.get("TUSHARE_TOKEN", "").strip()
+    if not token:
+        print("Skip WP data update: TUSHARE_TOKEN is not configured.")
+        return
+
+    current = now_cn()
+    trade_date = current.strftime("%Y%m%d")
+    if not is_trade_day(token, trade_date):
+        print(f"Skip WP data update: {trade_date} is not an A-share trading day.")
+        return
+    if not in_run_window(current):
+        print(f"Skip WP data update outside A-share trading window: {current:%Y-%m-%d %H:%M:%S}")
+        return
+
+    print(f"WP data single update started: {current:%Y-%m-%d %H:%M:%S}")
+    run_once()
+    print(f"WP data single update completed: {now_cn():%Y-%m-%d %H:%M:%S}")
 
 
 def run_session() -> None:
@@ -107,10 +132,14 @@ def run_session() -> None:
 
 
 def main() -> None:
-    if os.environ.get("GITHUB_EVENT_NAME") == "workflow_dispatch":
+    mode = os.environ.get("WP_DATA_RUN_MODE", "once").strip().lower()
+    if mode == "session":
+        run_session()
+        return
+    if os.environ.get("GITHUB_EVENT_NAME") == "workflow_dispatch" and os.environ.get("WP_FORCE_SESSION") == "1":
         run_once()
         return
-    run_session()
+    run_once_if_due()
 
 
 if __name__ == "__main__":
