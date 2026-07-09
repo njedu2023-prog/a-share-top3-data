@@ -56,4 +56,5 @@ jobs:
           MAX_MINUTE_SYMBOLS: "6000"
           WP_INTRADAY_MIN_PCT: "8"
           WP_DATA_RUN_MODE: "once"
+          WP_SCHEDULE_GRACE_SECONDS: "300"
           WP_SESSION_INTERVAL_SECONDS: "600"

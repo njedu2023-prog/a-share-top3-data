@@ -12,6 +12,7 @@ import tushare as ts
 
 CN_TZ = ZoneInfo("Asia/Shanghai")
 INTERVAL_SECONDS = int(os.environ.get("WP_SESSION_INTERVAL_SECONDS", "600"))
+SCHEDULE_GRACE_SECONDS = int(os.environ.get("WP_SCHEDULE_GRACE_SECONDS", "300"))
 PREP_START = time(9, 0)
 RUN_START = time(9, 25)
 LUNCH_START = time(11, 35)
@@ -36,8 +37,12 @@ def today_window(now: datetime) -> tuple[datetime, datetime, datetime, datetime]
 
 
 def in_run_window(now: datetime) -> bool:
-    current = now.time()
-    return (RUN_START <= current <= LUNCH_START) or (LUNCH_END <= current <= RUN_END)
+    today = now.date()
+    morning_start = datetime.combine(today, RUN_START, CN_TZ)
+    morning_end = datetime.combine(today, LUNCH_START, CN_TZ) + timedelta(seconds=SCHEDULE_GRACE_SECONDS)
+    afternoon_start = datetime.combine(today, LUNCH_END, CN_TZ)
+    afternoon_end = datetime.combine(today, RUN_END, CN_TZ) + timedelta(seconds=SCHEDULE_GRACE_SECONDS)
+    return (morning_start <= now <= morning_end) or (afternoon_start <= now <= afternoon_end)
 
 
 def is_trade_day(token: str, day: str) -> bool:
