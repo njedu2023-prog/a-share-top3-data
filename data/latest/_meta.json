@@ -1,7 +1,7 @@
 {
   "requested_trade_date": null,
   "resolved_trade_date": "20260709",
-  "generated_at_bj": "2026-07-09 11:29:09",
+  "generated_at_bj": "2026-07-09 11:53:51",
   "jobs": [
     {
       "key": "limit_list_d",
@@ -207,7 +207,7 @@
     "ok": true,
     "freq": "1min",
     "wp_pre_candidates": 0,
-    "minute_end": "2026-07-09 11:32:18",
+    "minute_end": "2026-07-09 11:57:05",
     "symbols_requested": 77,
     "symbols_success": 0,
     "symbols_failed": 77,
