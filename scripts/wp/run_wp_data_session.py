@@ -65,8 +65,13 @@ def run_once() -> None:
     env.setdefault("WP_INTRADAY_MIN_PCT", "8")
     subprocess.run([sys.executable, "scripts/fetch_daily_snapshots.py"], check=True, env=env)
     subprocess.run([sys.executable, "scripts/wp/wp_pipeline.py"], check=True, env=env)
+    current = now_cn()
+    commit_paths = [
+        "data/wp/latest",
+        f"data/wp/reports_input/{current:%Y}/{current:%Y%m%d}",
+    ]
     subprocess.run(
-        [sys.executable, "scripts/wp/github_commit_paths.py", "Update WP data", "data/wp", "data/latest"],
+        [sys.executable, "scripts/wp/github_commit_paths.py", "Update WP data", *commit_paths],
         check=True,
         env=env,
     )
