@@ -9,6 +9,7 @@ on:
       - scripts/fetch_daily_snapshots.py
       - scripts/wp/wp_pipeline.py
       - scripts/wp/run_wp_data_session.py
+      - scripts/wp/trigger_wp_data.txt
       - .github/workflows/run_wp_data_10min.yml
   schedule:
     # Beijing A-share trading windows, expressed in UTC.
