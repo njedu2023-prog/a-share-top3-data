@@ -1,24 +1,46 @@
-name: Run WP Data 10min
+name: Run WP Data Sessions
 
 on:
   workflow_dispatch:
+    inputs:
+      mode:
+        description: "Run mode"
+        required: true
+        default: "once"
+        type: choice
+        options:
+          - once
+          - due
+          - session
+  push:
+    branches:
+      - main
+    paths:
+      - scripts/wp/run_wp_data_session.py
+      - scripts/wp/trigger_wp_data.txt
+      - .github/workflows/run_wp_data_10min.yml
+  schedule:
+    # Beijing 09:20 and 12:50. Each job remains alive for one trading session.
+    - cron: "20 1 * * 1-5"
+    - cron: "50 4 * * 1-5"
 
 permissions:
   contents: write
 
 concurrency:
-  group: wp-data-session-${{ github.ref }}
-  cancel-in-progress: true
+  group: wp-data-${{ github.event_name == 'schedule' && 'session' || 'single' }}-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   wp-data:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 180
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+          cache: pip
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
@@ -38,6 +60,9 @@ jobs:
           MINUTE_FREQ: "1min"
           MAX_MINUTE_SYMBOLS: "6000"
           WP_INTRADAY_MIN_PCT: "8"
-          WP_DATA_RUN_MODE: "once"
+          WP_DATA_RUN_MODE: ${{ github.event_name == 'schedule' && 'session' || github.event_name == 'push' && 'due' || github.event.inputs.mode || 'once' }}
           WP_SCHEDULE_GRACE_SECONDS: "600"
           WP_SESSION_INTERVAL_SECONDS: "600"
+          WP_MIN_RUN_SPACING_SECONDS: "300"
+          WP_TRIGGER_REPO: "njedu2023-prog/WP"
+          WP_TRIGGER_TOKEN: ${{ secrets.WP_TRIGGER_TOKEN || secrets.GH_PAT || secrets.PERSONAL_ACCESS_TOKEN }}
