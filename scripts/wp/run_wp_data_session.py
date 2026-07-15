@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import sys
 import time as time_module
 from datetime import datetime, time, timedelta
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
 from zoneinfo import ZoneInfo
 
 import tushare as ts
@@ -13,36 +16,53 @@ import tushare as ts
 CN_TZ = ZoneInfo("Asia/Shanghai")
 INTERVAL_SECONDS = int(os.environ.get("WP_SESSION_INTERVAL_SECONDS", "600"))
 SCHEDULE_GRACE_SECONDS = int(os.environ.get("WP_SCHEDULE_GRACE_SECONDS", "600"))
-PREP_START = time(9, 0)
-RUN_START = time(9, 25)
-LUNCH_START = time(11, 35)
-LUNCH_END = time(12, 55)
-RUN_END = time(15, 10)
+MIN_RUN_SPACING_SECONDS = int(os.environ.get("WP_MIN_RUN_SPACING_SECONDS", "300"))
+MORNING_PREP = time(9, 15)
+MORNING_START = time(9, 25)
+MORNING_END = time(11, 35)
+AFTERNOON_PREP = time(12, 45)
+AFTERNOON_START = time(12, 55)
+AFTERNOON_END = time(15, 10)
 
 
 def now_cn() -> datetime:
     return datetime.now(CN_TZ)
 
 
-def today_window(now: datetime) -> tuple[datetime, datetime, datetime, datetime] | None:
+def session_window(now: datetime) -> tuple[str, datetime, datetime] | None:
     today = now.date()
-    prep_dt = datetime.combine(today, PREP_START, CN_TZ)
-    start_dt = datetime.combine(today, RUN_START, CN_TZ)
-    lunch_start_dt = datetime.combine(today, LUNCH_START, CN_TZ)
-    lunch_end_dt = datetime.combine(today, LUNCH_END, CN_TZ)
-    end_dt = datetime.combine(today, RUN_END, CN_TZ)
-    if prep_dt <= now <= end_dt:
-        return start_dt, lunch_start_dt, lunch_end_dt, end_dt
+    morning_prep = datetime.combine(today, MORNING_PREP, CN_TZ)
+    morning_start = datetime.combine(today, MORNING_START, CN_TZ)
+    morning_end = datetime.combine(today, MORNING_END, CN_TZ)
+    afternoon_prep = datetime.combine(today, AFTERNOON_PREP, CN_TZ)
+    afternoon_start = datetime.combine(today, AFTERNOON_START, CN_TZ)
+    afternoon_end = datetime.combine(today, AFTERNOON_END, CN_TZ)
+    grace = timedelta(seconds=SCHEDULE_GRACE_SECONDS)
+    if morning_prep <= now <= morning_end + grace:
+        return "morning", morning_start, morning_end
+    if afternoon_prep <= now <= afternoon_end + grace:
+        return "afternoon", afternoon_start, afternoon_end
     return None
+
+
+def fixed_slots(start: datetime, end: datetime) -> list[datetime]:
+    slots: list[datetime] = []
+    target = start
+    while target <= end:
+        slots.append(target)
+        target += timedelta(seconds=INTERVAL_SECONDS)
+    if not slots or slots[-1] != end:
+        slots.append(end)
+    return slots
 
 
 def in_run_window(now: datetime) -> bool:
     today = now.date()
-    morning_start = datetime.combine(today, RUN_START, CN_TZ)
-    morning_end = datetime.combine(today, LUNCH_START, CN_TZ) + timedelta(seconds=SCHEDULE_GRACE_SECONDS)
-    afternoon_start = datetime.combine(today, LUNCH_END, CN_TZ)
-    afternoon_end = datetime.combine(today, RUN_END, CN_TZ) + timedelta(seconds=SCHEDULE_GRACE_SECONDS)
-    return (morning_start <= now <= morning_end) or (afternoon_start <= now <= afternoon_end)
+    morning_start = datetime.combine(today, MORNING_START, CN_TZ)
+    morning_end = datetime.combine(today, MORNING_END, CN_TZ) + timedelta(seconds=SCHEDULE_GRACE_SECONDS)
+    afternoon_start = datetime.combine(today, AFTERNOON_START, CN_TZ)
+    afternoon_end = datetime.combine(today, AFTERNOON_END, CN_TZ) + timedelta(seconds=SCHEDULE_GRACE_SECONDS)
+    return morning_start <= now <= morning_end or afternoon_start <= now <= afternoon_end
 
 
 def is_trade_day(token: str, day: str) -> bool:
@@ -50,6 +70,43 @@ def is_trade_day(token: str, day: str) -> bool:
     pro = ts.pro_api()
     cal = pro.trade_cal(exchange="SSE", start_date=day, end_date=day)
     return bool(len(cal) and int(cal.iloc[0].get("is_open", 0)) == 1)
+
+
+def dispatch_wp_update() -> None:
+    token = os.environ.get("WP_TRIGGER_TOKEN", "").strip()
+    target_repo = os.environ.get("WP_TRIGGER_REPO", "njedu2023-prog/WP").strip()
+    if not token:
+        print("::warning::WP_TRIGGER_TOKEN is not configured; WP schedule and monitor remain the fallback.")
+        return
+
+    payload = json.dumps(
+        {
+            "event_type": "wp_data_ready",
+            "client_payload": {
+                "source_repository": os.environ.get("GITHUB_REPOSITORY", "njedu2023-prog/a-share-top3-data"),
+                "completed_at": now_cn().strftime("%Y-%m-%d %H:%M:%S"),
+            },
+        }
+    ).encode("utf-8")
+    request = Request(
+        f"https://api.github.com/repos/{target_repo}/dispatches",
+        data=payload,
+        method="POST",
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Accept": "application/vnd.github+json",
+            "X-GitHub-Api-Version": "2022-11-28",
+            "Content-Type": "application/json",
+            "User-Agent": "WP-upstream-dispatcher",
+        },
+    )
+    try:
+        with urlopen(request, timeout=30) as response:
+            if response.status != 204:
+                raise RuntimeError(f"unexpected repository_dispatch status {response.status}")
+        print(f"Triggered WP through repository_dispatch: {target_repo}")
+    except (HTTPError, URLError, TimeoutError, RuntimeError) as exc:
+        print(f"::warning::Cannot trigger WP directly: {exc}; schedule and monitor remain the fallback.")
 
 
 def run_once() -> None:
@@ -75,14 +132,18 @@ def run_once() -> None:
         check=True,
         env=env,
     )
+    dispatch_wp_update()
+
+
+def require_token() -> str:
+    token = os.environ.get("TUSHARE_TOKEN", "").strip()
+    if not token:
+        raise RuntimeError("TUSHARE_TOKEN is not configured.")
+    return token
 
 
 def run_once_if_due() -> None:
-    token = os.environ.get("TUSHARE_TOKEN", "").strip()
-    if not token:
-        print("Skip WP data update: TUSHARE_TOKEN is not configured.")
-        return
-
+    token = require_token()
     current = now_cn()
     trade_date = current.strftime("%Y%m%d")
     if not is_trade_day(token, trade_date):
@@ -98,59 +159,76 @@ def run_once_if_due() -> None:
 
 
 def run_session() -> None:
-    token = os.environ.get("TUSHARE_TOKEN", "").strip()
-    if not token:
-        print("Skip WP data session: TUSHARE_TOKEN is not configured.")
-        return
-
+    token = require_token()
     current = now_cn()
     trade_date = current.strftime("%Y%m%d")
     if not is_trade_day(token, trade_date):
         print(f"Skip WP data session: {trade_date} is not an A-share trading day.")
         return
 
-    window = today_window(current)
+    window = session_window(current)
     if window is None:
         print(f"Skip WP data session outside trading session prep/window: {current:%Y-%m-%d %H:%M:%S}")
         return
 
-    start_dt, lunch_start_dt, lunch_end_dt, end_dt = window
-    if current < start_dt:
-        wait_seconds = max(0.0, (start_dt - current).total_seconds())
-        print(f"Wait until A-share session start: {start_dt:%Y-%m-%d %H:%M:%S}, wait={wait_seconds:.0f}s")
-        time_module.sleep(wait_seconds)
+    session_name, start_dt, end_dt = window
+    slots = fixed_slots(start_dt, end_dt)
+    successful_runs = 0
+    failed_runs = 0
+    last_run_completed: datetime | None = None
+    print(
+        f"WP data {session_name} session targets: "
+        + ", ".join(slot.strftime("%H:%M") for slot in slots)
+    )
 
-    while now_cn() <= end_dt:
-        iteration_start = now_cn()
-        if lunch_start_dt <= iteration_start < lunch_end_dt:
-            sleep_seconds = max(0.0, (lunch_end_dt - iteration_start).total_seconds())
-            print(f"Pause during A-share lunch break until {lunch_end_dt:%Y-%m-%d %H:%M:%S}, sleep={sleep_seconds:.0f}s")
-            time_module.sleep(sleep_seconds)
-            continue
-        print(f"WP data iteration started: {iteration_start:%Y-%m-%d %H:%M:%S}")
-        run_once()
-        next_at = iteration_start + timedelta(seconds=INTERVAL_SECONDS)
+    for slot in slots:
         current = now_cn()
-        next_boundary = lunch_start_dt if current < lunch_start_dt < next_at else end_dt
-        sleep_seconds = min((next_at - current).total_seconds(), (next_boundary - current).total_seconds())
-        if sleep_seconds <= 0:
-            continue
-        print(f"Next WP data iteration at {next_at:%Y-%m-%d %H:%M:%S}, sleep={sleep_seconds:.0f}s")
-        time_module.sleep(sleep_seconds)
+        if current < slot:
+            wait_seconds = max(0.0, (slot - current).total_seconds())
+            print(f"Wait for fixed WP data slot {slot:%Y-%m-%d %H:%M:%S}, sleep={wait_seconds:.0f}s")
+            time_module.sleep(wait_seconds)
+            current = now_cn()
 
-    print(f"WP data session completed: {now_cn():%Y-%m-%d %H:%M:%S}")
+        late_seconds = (current - slot).total_seconds()
+        if late_seconds > SCHEDULE_GRACE_SECONDS:
+            print(f"Skip expired WP data slot {slot:%H:%M}; late={late_seconds:.0f}s")
+            continue
+        if (
+            last_run_completed is not None
+            and slot != end_dt
+            and (current - last_run_completed).total_seconds() < MIN_RUN_SPACING_SECONDS
+        ):
+            print(f"Skip compressed WP data slot {slot:%H:%M}; previous run just completed.")
+            continue
+
+        print(f"WP data fixed-slot iteration started: target={slot:%H:%M}, actual={current:%H:%M:%S}")
+        try:
+            run_once()
+            successful_runs += 1
+            last_run_completed = now_cn()
+            print(f"WP data fixed-slot iteration completed: {last_run_completed:%Y-%m-%d %H:%M:%S}")
+        except (subprocess.CalledProcessError, HTTPError, URLError, TimeoutError, RuntimeError) as exc:
+            failed_runs += 1
+            print(f"::error::WP data slot {slot:%H:%M} failed: {exc}")
+
+    if successful_runs == 0:
+        raise RuntimeError(f"WP data {session_name} session completed without a successful iteration.")
+    print(
+        f"WP data {session_name} session completed: {now_cn():%Y-%m-%d %H:%M:%S}; "
+        f"success={successful_runs}, failed={failed_runs}"
+    )
 
 
 def main() -> None:
     mode = os.environ.get("WP_DATA_RUN_MODE", "once").strip().lower()
     if mode == "session":
         run_session()
-        return
-    event_name = os.environ.get("GITHUB_EVENT_NAME", "").strip()
-    if event_name in {"workflow_dispatch", "push"}:
+    elif mode == "due":
+        run_once_if_due()
+    elif mode == "once":
         run_once()
-        return
-    run_once_if_due()
+    else:
+        raise ValueError(f"Unsupported WP_DATA_RUN_MODE: {mode}")
 
 
 if __name__ == "__main__":
