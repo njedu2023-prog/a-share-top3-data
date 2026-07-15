@@ -1,10 +1,10 @@
 {
-  "generated_at": "2026-07-15 10:16:52",
+  "generated_at": "2026-07-15 13:42:32",
   "status": "ok",
   "source_trade_date": "20260715",
   "expected_trade_date": "20260715",
-  "row_count": 56,
-  "candidate_count": 56,
+  "row_count": 52,
+  "candidate_count": 52,
   "columns": [
     "trade_date",
     "update_time",
