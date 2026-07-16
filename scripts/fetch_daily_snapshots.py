@@ -5,7 +5,7 @@ import random
 import traceback
 from dataclasses import dataclass
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, Callable, Dict, Optional, List, Tuple
 
 import pandas as pd
@@ -24,6 +24,13 @@ def bj_now() -> datetime:
 
 def bj_today_yyyymmdd() -> str:
     return bj_now().strftime("%Y%m%d")
+
+
+def default_trade_date(current: datetime | None = None) -> str:
+    local = current or bj_now()
+    if (local.hour, local.minute) < (9, 25):
+        local -= timedelta(days=1)
+    return local.strftime("%Y%m%d")
 
 
 def ensure_dir(p: Path) -> None:
@@ -264,12 +271,12 @@ def _clear_csv_dir(path: Path) -> None:
 def resolve_trade_date(pro, requested_trade_date: str) -> str:
     """
     - 如果指定了 TRADE_DATE：优先用它；但若它不是交易日，则回退最近交易日
-    - 如果未指定：默认用北京时间今天；若今天非交易日则回退最近交易日
+    - 如果未指定：09:25 前使用上一自然日，再按交易日历回退；其余时间使用今天
     """
-    target = requested_trade_date.strip() if requested_trade_date else bj_today_yyyymmdd()
+    target = requested_trade_date.strip() if requested_trade_date else default_trade_date()
 
     end_date = target
-    start_date = (datetime.strptime(target, "%Y%m%d") - pd.Timedelta(days=30)).strftime("%Y%m%d")
+    start_date = (datetime.strptime(target, "%Y%m%d") - timedelta(days=30)).strftime("%Y%m%d")
 
     cal = pro.trade_cal(exchange="SSE", start_date=start_date, end_date=end_date)
     if cal is None or cal.empty:
