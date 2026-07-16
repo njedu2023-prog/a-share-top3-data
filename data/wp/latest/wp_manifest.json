@@ -1,10 +1,12 @@
 {
-  "generated_at": "2026-07-16 11:55:13",
+  "generated_at": "2026-07-16 14:10:43",
+  "scheduled_slot": "2026-07-16 14:05:00",
+  "trigger_event": "push",
   "status": "ok",
   "source_trade_date": "20260716",
   "expected_trade_date": "20260716",
-  "row_count": 34,
-  "candidate_count": 34,
+  "row_count": 32,
+  "candidate_count": 32,
   "columns": [
     "trade_date",
     "update_time",
