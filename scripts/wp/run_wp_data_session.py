@@ -1,18 +1,21 @@
 from __future__ import annotations
 
-import json
 import os
 import subprocess
 import sys
 import time as time_module
 from datetime import datetime, time, timedelta
 from urllib.error import HTTPError, URLError
-from urllib.request import Request, urlopen
 from zoneinfo import ZoneInfo
 
 import tushare as ts
 
-from wp_schedule import due_decision
+try:
+    from scripts.wp.http_retry import request_json
+    from scripts.wp.wp_schedule import due_decision
+except ModuleNotFoundError:  # Executed as python scripts/wp/run_wp_data_session.py.
+    from http_retry import request_json
+    from wp_schedule import due_decision
 
 
 CN_TZ = ZoneInfo("Asia/Shanghai")
@@ -81,31 +84,21 @@ def dispatch_wp_update() -> None:
         print("::warning::WP_TRIGGER_TOKEN is not configured; WP schedule and monitor remain the fallback.")
         return
 
-    payload = json.dumps(
-        {
-            "event_type": "wp_data_ready",
-            "client_payload": {
-                "source_repository": os.environ.get("GITHUB_REPOSITORY", "njedu2023-prog/a-share-top3-data"),
-                "completed_at": now_cn().strftime("%Y-%m-%d %H:%M:%S"),
-            },
-        }
-    ).encode("utf-8")
-    request = Request(
-        f"https://api.github.com/repos/{target_repo}/dispatches",
-        data=payload,
-        method="POST",
-        headers={
-            "Authorization": f"Bearer {token}",
-            "Accept": "application/vnd.github+json",
-            "X-GitHub-Api-Version": "2022-11-28",
-            "Content-Type": "application/json",
-            "User-Agent": "WP-upstream-dispatcher",
+    payload = {
+        "event_type": "wp_data_ready",
+        "client_payload": {
+            "source_repository": os.environ.get("GITHUB_REPOSITORY", "njedu2023-prog/a-share-top3-data"),
+            "completed_at": now_cn().strftime("%Y-%m-%d %H:%M:%S"),
         },
-    )
+    }
     try:
-        with urlopen(request, timeout=30) as response:
-            if response.status != 204:
-                raise RuntimeError(f"unexpected repository_dispatch status {response.status}")
+        request_json(
+            f"https://api.github.com/repos/{target_repo}/dispatches",
+            token=token,
+            method="POST",
+            payload=payload,
+            user_agent="WP-upstream-dispatcher",
+        )
         print(f"Triggered WP through repository_dispatch: {target_repo}")
     except (HTTPError, URLError, TimeoutError, RuntimeError) as exc:
         print(f"::warning::Cannot trigger WP directly: {exc}; schedule and monitor remain the fallback.")
