@@ -44,6 +44,7 @@ jobs:
         run: python scripts/wp/check_wp_data_due.py
         env:
           WP_DATA_RUN_MODE: ${{ github.event_name == 'schedule' && 'due' || github.event_name == 'push' && 'due' || github.event.inputs.mode || 'once' }}
+          WP_SCHEDULE_GRACE_SECONDS: "600"
       - uses: actions/setup-python@v5
         if: steps.due.outputs.should_run == 'true'
         with:

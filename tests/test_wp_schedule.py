@@ -30,6 +30,20 @@ class WpScheduleTest(unittest.TestCase):
         current = datetime(2026, 7, 16, 13, 29, tzinfo=CN_TZ)
         self.assertEqual(latest_due_slot(current).strftime("%H:%M"), "13:25")
 
+    def test_grace_catches_session_tail_slots(self) -> None:
+        self.assertEqual(
+            latest_due_slot(datetime(2026, 7, 16, 11, 37, tzinfo=CN_TZ)).strftime("%H:%M"),
+            "11:35",
+        )
+        self.assertEqual(
+            latest_due_slot(datetime(2026, 7, 16, 15, 12, tzinfo=CN_TZ)).strftime("%H:%M"),
+            "15:10",
+        )
+
+    def test_grace_stops_after_ten_minutes(self) -> None:
+        self.assertIsNone(latest_due_slot(datetime(2026, 7, 16, 11, 46, tzinfo=CN_TZ)))
+        self.assertIsNone(latest_due_slot(datetime(2026, 7, 16, 15, 21, tzinfo=CN_TZ)))
+
     def test_manifest_deduplicates_a_covered_slot(self) -> None:
         current = datetime(2026, 7, 16, 13, 29, tzinfo=CN_TZ)
         with tempfile.TemporaryDirectory() as directory:

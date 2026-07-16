@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 from pathlib import Path
@@ -13,6 +14,7 @@ MORNING_START = time(9, 25)
 MORNING_END = time(11, 35)
 AFTERNOON_START = time(12, 55)
 AFTERNOON_END = time(15, 10)
+SCHEDULE_GRACE_SECONDS = int(os.environ.get("WP_SCHEDULE_GRACE_SECONDS", "600"))
 
 
 @dataclass(frozen=True)
@@ -52,9 +54,14 @@ def scheduled_slots(day: date) -> list[datetime]:
 
 def in_data_window(current: datetime) -> bool:
     local = current.astimezone(CN_TZ)
+    morning_start = datetime.combine(local.date(), MORNING_START, CN_TZ)
+    morning_end = datetime.combine(local.date(), MORNING_END, CN_TZ)
+    afternoon_start = datetime.combine(local.date(), AFTERNOON_START, CN_TZ)
+    afternoon_end = datetime.combine(local.date(), AFTERNOON_END, CN_TZ)
+    grace = timedelta(seconds=SCHEDULE_GRACE_SECONDS)
     return (
-        MORNING_START <= local.time() <= MORNING_END
-        or AFTERNOON_START <= local.time() <= AFTERNOON_END
+        morning_start <= local <= morning_end + grace
+        or afternoon_start <= local <= afternoon_end + grace
     )
 
 

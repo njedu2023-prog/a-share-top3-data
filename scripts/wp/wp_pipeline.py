@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import json
 import os
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
+from io import StringIO
 from pathlib import Path
 from urllib.error import URLError
 from urllib.request import Request, urlopen
@@ -47,11 +48,19 @@ def read_csv_source(relative_path: str) -> pd.DataFrame:
         return pd.read_csv(local_path, encoding="utf-8-sig")
     url = f"{RAW_BASE_URL}/{relative_path}"
     try:
-        with urlopen(url, timeout=30) as resp:
+        request = Request(url, headers={"User-Agent": "WP-direct-processor"})
+        with urlopen(request, timeout=30) as resp:
             if resp.status >= 400:
                 return pd.DataFrame()
-        return pd.read_csv(url, encoding="utf-8-sig")
-    except (URLError, OSError, pd.errors.EmptyDataError):
+            content = resp.read().decode("utf-8-sig")
+        return pd.read_csv(StringIO(content))
+    except (
+        URLError,
+        OSError,
+        UnicodeDecodeError,
+        pd.errors.EmptyDataError,
+        pd.errors.ParserError,
+    ):
         return pd.DataFrame()
 
 
@@ -65,7 +74,7 @@ def read_json_url(url: str):
 
 
 def now_cn() -> datetime:
-    return datetime.now(UTC).replace(tzinfo=None) + pd.Timedelta(hours=8)
+    return datetime.now(UTC).replace(tzinfo=None) + timedelta(hours=8)
 
 
 def target_trade_date() -> str:
@@ -144,10 +153,7 @@ def latest_historical_daily_basic(trade_date: str) -> pd.DataFrame:
 
 
 def previous_limitup_codes(trade_date: str) -> set[str]:
-    dates = []
-    year_dir = RAW_ROOT / trade_date[:4]
-    if year_dir.exists():
-        dates = sorted(path.name for path in year_dir.iterdir() if path.is_dir() and path.name < trade_date)
+    dates = [date for date in available_raw_dates(trade_date) if date < trade_date]
     if not dates:
         return set()
     prev_date = dates[-1]
@@ -158,15 +164,21 @@ def previous_limitup_codes(trade_date: str) -> set[str]:
 
 
 def available_raw_dates(trade_date: str, lookback_days: int = 45) -> list[str]:
-    start_dt = datetime.strptime(trade_date, "%Y%m%d") - pd.Timedelta(days=lookback_days)
+    start_dt = datetime.strptime(trade_date, "%Y%m%d") - timedelta(days=lookback_days)
     end_dt = datetime.strptime(trade_date, "%Y%m%d")
     start = start_dt.strftime("%Y%m%d")
     dates: list[str] = []
-    year_dir = RAW_ROOT / trade_date[:4]
-    if year_dir.exists():
-        dates.extend(path.name for path in year_dir.iterdir() if path.is_dir())
-    if not dates:
-        payload = read_json_url(f"https://api.github.com/repos/njedu2023-prog/a-share-top3-data/contents/data/raw/{trade_date[:4]}?ref=main")
+    for year in range(start_dt.year, end_dt.year + 1):
+        year_dir = RAW_ROOT / str(year)
+        if year_dir.exists():
+            dates.extend(path.name for path in year_dir.iterdir() if path.is_dir())
+        # A direct WP checkout contains only scripts; the fetch stage then
+        # creates today's local directory. Always merge the remote archive so
+        # that one local date cannot hide all prior trading days.
+        payload = read_json_url(
+            "https://api.github.com/repos/njedu2023-prog/"
+            f"a-share-top3-data/contents/data/raw/{year}?ref=main"
+        )
         if isinstance(payload, list):
             dates.extend(item.get("name", "") for item in payload if item.get("type") == "dir")
     if not dates:
@@ -174,8 +186,8 @@ def available_raw_dates(trade_date: str, lookback_days: int = 45) -> list[str]:
         while current <= end_dt:
             if current.weekday() < 5:
                 dates.append(current.strftime("%Y%m%d"))
-            current += pd.Timedelta(days=1)
-    return sorted(date for date in dates if start <= date <= trade_date)
+            current += timedelta(days=1)
+    return sorted(set(date for date in dates if start <= date <= trade_date))
 
 
 def build_history_features(out: pd.DataFrame, trade_date: str, current_daily: pd.DataFrame, daily_basic: pd.DataFrame) -> pd.DataFrame:
@@ -543,6 +555,36 @@ def build_rank_input(candidates: pd.DataFrame | None = None) -> pd.DataFrame:
     return df
 
 
+def historical_feature_quality(frame: pd.DataFrame) -> dict:
+    if frame.empty:
+        return {
+            "history_feature_rows": 0,
+            "history_feature_coverage_pct": 100.0,
+            "history_features_ready": True,
+        }
+    pct = pd.to_numeric(frame.get("pct_chg"), errors="coerce")
+    ret_5d = pd.to_numeric(frame.get("ret_5d"), errors="coerce")
+    ratio_5d = pd.to_numeric(frame.get("amount_ratio_5d"), errors="coerce")
+    ma5 = pd.to_numeric(frame.get("ma5_position"), errors="coerce")
+    ma20 = pd.to_numeric(frame.get("ma20_position"), errors="coerce")
+    meaningful = (
+        ratio_5d.notna()
+        & ratio_5d.gt(0)
+        & (
+            ratio_5d.sub(1).abs().gt(1e-6)
+            | ret_5d.sub(pct).abs().gt(1e-6)
+            | ma5.abs().gt(1e-6)
+            | ma20.abs().gt(1e-6)
+        )
+    )
+    coverage = float(meaningful.mean() * 100)
+    return {
+        "history_feature_rows": int(meaningful.sum()),
+        "history_feature_coverage_pct": round(coverage, 2),
+        "history_features_ready": bool(len(frame) < 3 or coverage >= 70),
+    }
+
+
 def healthcheck(rank_input: pd.DataFrame | None = None) -> dict:
     df = rank_input if rank_input is not None else pd.read_csv(LATEST / "wp_latest_rank_input.csv")
     data_trade_date = ""
@@ -556,6 +598,9 @@ def healthcheck(rank_input: pd.DataFrame | None = None) -> dict:
     status = "ok" if not df.empty else "empty_schema_ready"
     if source_trade_date and source_trade_date != expected_trade_date:
         status = "stale_data"
+    history_quality = historical_feature_quality(df)
+    if status == "ok" and not history_quality["history_features_ready"]:
+        status = "degraded_history"
     payload = {
         "generated_at": now_cn().strftime("%Y-%m-%d %H:%M:%S"),
         "scheduled_slot": os.environ.get("WP_TARGET_SLOT", "").strip(),
@@ -565,6 +610,7 @@ def healthcheck(rank_input: pd.DataFrame | None = None) -> dict:
         "expected_trade_date": expected_trade_date,
         "row_count": int(len(df)),
         "candidate_count": int(len(df)),
+        **history_quality,
         "columns": list(df.columns),
         "latest_files": [
             "wp_latest_snapshot.csv",
