@@ -558,6 +558,8 @@ def healthcheck(rank_input: pd.DataFrame | None = None) -> dict:
         status = "stale_data"
     payload = {
         "generated_at": now_cn().strftime("%Y-%m-%d %H:%M:%S"),
+        "scheduled_slot": os.environ.get("WP_TARGET_SLOT", "").strip(),
+        "trigger_event": os.environ.get("GITHUB_EVENT_NAME", "").strip(),
         "status": status,
         "source_trade_date": source_trade_date,
         "expected_trade_date": expected_trade_date,

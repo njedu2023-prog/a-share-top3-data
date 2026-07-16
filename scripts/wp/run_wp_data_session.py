@@ -12,6 +12,8 @@ from zoneinfo import ZoneInfo
 
 import tushare as ts
 
+from wp_schedule import due_decision
+
 
 CN_TZ = ZoneInfo("Asia/Shanghai")
 INTERVAL_SECONDS = int(os.environ.get("WP_SESSION_INTERVAL_SECONDS", "600"))
@@ -143,17 +145,24 @@ def require_token() -> str:
 
 
 def run_once_if_due() -> None:
-    token = require_token()
     current = now_cn()
+    decision = due_decision(current, "data/wp/latest/wp_manifest.json")
+    if not decision.should_run:
+        target = decision.target_slot.strftime("%H:%M") if decision.target_slot else "none"
+        print(f"Skip WP data update: {decision.reason}; target={target}")
+        return
+
+    token = require_token()
     trade_date = current.strftime("%Y%m%d")
     if not is_trade_day(token, trade_date):
         print(f"Skip WP data update: {trade_date} is not an A-share trading day.")
         return
-    if not in_run_window(current):
-        print(f"Skip WP data update outside A-share trading window: {current:%Y-%m-%d %H:%M:%S}")
-        return
-
-    print(f"WP data single update started: {current:%Y-%m-%d %H:%M:%S}")
+    target_text = decision.target_slot.strftime("%Y-%m-%d %H:%M:%S") if decision.target_slot else ""
+    os.environ["WP_TARGET_SLOT"] = target_text
+    print(
+        f"WP data catch-up update started: actual={current:%Y-%m-%d %H:%M:%S}, "
+        f"target={target_text}, reason={decision.reason}"
+    )
     run_once()
     print(f"WP data single update completed: {now_cn():%Y-%m-%d %H:%M:%S}")
 
