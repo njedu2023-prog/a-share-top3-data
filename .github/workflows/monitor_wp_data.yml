@@ -5,8 +5,8 @@ on:
   schedule:
     # Independent offset heartbeat. If the primary cron is delayed or dropped,
     # this workflow dispatches a guarded catch-up run in the same repository.
-    - cron: "3-58/5 1-3,5-7 * * 1-5"
-    - cron: "58 4 * * 1-5"
+    - cron: "4-59/5 1-3,5-7 * * 1-5"
+    - cron: "59 4 * * 1-5"
 
 permissions:
   actions: write
