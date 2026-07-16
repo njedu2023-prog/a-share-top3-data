@@ -1,4 +1,4 @@
-name: Run WP Data Sessions
+name: Run WP Data Updates
 
 on:
   workflow_dispatch:
@@ -20,21 +20,29 @@ on:
       - scripts/wp/trigger_wp_data.txt
       - .github/workflows/run_wp_data_10min.yml
   schedule:
-    # Beijing 09:20 and 12:50. Each job remains alive for one trading session.
-    - cron: "20 1 * * 1-5"
-    - cron: "50 4 * * 1-5"
+    # Short, independent jobs. Beijing 09:25-11:35 and 12:55-14:15 run every
+    # 10 minutes; the 14:20-14:55 decision window runs every 5 minutes; the
+    # final snapshots run at 15:05 and 15:10. The script verifies the SSE
+    # trading calendar before doing any work.
+    - cron: "25,35,45,55 1 * * 1-5"
+    - cron: "5,15,25,35,45,55 2 * * 1-5"
+    - cron: "5,15,25,35 3 * * 1-5"
+    - cron: "55 4 * * 1-5"
+    - cron: "5,15,25,35,45,55 5 * * 1-5"
+    - cron: "5,15,20,25,30,35,40,45,50,55 6 * * 1-5"
+    - cron: "5,10 7 * * 1-5"
 
 permissions:
   contents: write
 
 concurrency:
-  group: wp-data-${{ github.event_name == 'schedule' && 'session' || 'single' }}-${{ github.ref }}
+  group: wp-data-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
   wp-data:
     runs-on: ubuntu-latest
-    timeout-minutes: 180
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -60,9 +68,7 @@ jobs:
           MINUTE_FREQ: "1min"
           MAX_MINUTE_SYMBOLS: "6000"
           WP_INTRADAY_MIN_PCT: "8"
-          WP_DATA_RUN_MODE: ${{ github.event_name == 'schedule' && 'session' || github.event_name == 'push' && 'due' || github.event.inputs.mode || 'once' }}
+          WP_DATA_RUN_MODE: ${{ github.event_name == 'schedule' && 'due' || github.event_name == 'push' && 'due' || github.event.inputs.mode || 'once' }}
           WP_SCHEDULE_GRACE_SECONDS: "600"
-          WP_SESSION_INTERVAL_SECONDS: "600"
-          WP_MIN_RUN_SPACING_SECONDS: "300"
           WP_TRIGGER_REPO: "njedu2023-prog/WP"
           WP_TRIGGER_TOKEN: ${{ secrets.WP_TRIGGER_TOKEN || secrets.GH_PAT || secrets.PERSONAL_ACCESS_TOKEN }}
