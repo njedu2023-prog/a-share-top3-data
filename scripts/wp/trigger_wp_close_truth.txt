@@ -1,0 +1,4 @@
+WP close-truth trigger.
+
+This file is updated by the external self-healing monitor when a post-close
+truth publication is missing. A content change starts Publish WP Close Truth.

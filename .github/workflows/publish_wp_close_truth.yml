@@ -1,0 +1,66 @@
+name: Publish WP Close Truth
+
+on:
+  workflow_dispatch:
+    inputs:
+      trade_date:
+        description: "Trade date YYYYMMDD (optional)"
+        required: false
+        default: ""
+  push:
+    branches:
+      - main
+    paths:
+      - scripts/wp/publish_close_truth.py
+      - scripts/wp/trigger_wp_close_truth.txt
+      - .github/workflows/publish_wp_close_truth.yml
+  schedule:
+    # Beijing 15:12 / 15:22 / 15:32 / 15:47 / 16:07.
+    # Repeated staggered attempts tolerate delayed or dropped GitHub cron events.
+    - cron: "12,22,32,47 7 * * 1-5"
+    - cron: "7 8 * * 1-5"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: wp-close-truth-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Fetch validated close truth
+        id: truth
+        run: python scripts/wp/publish_close_truth.py
+        env:
+          TUSHARE_TOKEN: ${{ secrets.TUSHARE_TOKEN }}
+          TRADE_DATE: ${{ github.event.inputs.trade_date || '' }}
+          WP_CLOSE_TRUTH_MAX_RETRY: "5"
+          WP_CLOSE_TRUTH_RETRY_DELAY_SECONDS: "15"
+          WP_CLOSE_TRUTH_MIN_ROWS: "1000"
+
+      - name: Publish close truth through GitHub API
+        if: steps.truth.outputs.should_publish == 'true'
+        run: |
+          python scripts/wp/github_commit_paths.py \
+            "Publish WP close truth ${{ steps.truth.outputs.trade_date }}" \
+            "data/raw/${{ steps.truth.outputs.year }}/${{ steps.truth.outputs.trade_date }}/daily.csv" \
+            "data/raw/${{ steps.truth.outputs.year }}/${{ steps.truth.outputs.trade_date }}/stk_limit.csv" \
+            "data/raw/${{ steps.truth.outputs.year }}/${{ steps.truth.outputs.trade_date }}/close_truth_manifest.json"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
