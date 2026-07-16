@@ -8,8 +8,12 @@ from datetime import datetime, time
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote
-from urllib.request import Request, urlopen
 from zoneinfo import ZoneInfo
+
+try:
+    from scripts.wp.http_retry import request_json
+except ModuleNotFoundError:  # Executed as python scripts/wp/monitor_wp_data.py.
+    from http_retry import request_json
 
 
 CN_TZ = ZoneInfo("Asia/Shanghai")
@@ -46,31 +50,13 @@ def parse_dt(value: Any) -> datetime | None:
     return None
 
 
-def request_json(
-    url: str,
-    token: str = "",
-    method: str = "GET",
-    payload: dict[str, Any] | None = None,
-    timeout: int = 30,
-) -> Any:
-    data = None if payload is None else json.dumps(payload).encode("utf-8")
-    headers = {
-        "Accept": "application/vnd.github+json",
-        "X-GitHub-Api-Version": "2022-11-28",
-        "Content-Type": "application/json",
-        "User-Agent": "WP-data-monitor",
-    }
-    if token:
-        headers["Authorization"] = f"Bearer {token}"
-    request = Request(url, data=data, method=method, headers=headers)
-    with urlopen(request, timeout=timeout) as response:
-        body = response.read().decode("utf-8")
-        return json.loads(body) if body else {}
-
-
 def read_manifest(token: str) -> dict[str, Any]:
     encoded = quote(MANIFEST_PATH, safe="/")
-    payload = request_json(f"https://api.github.com/repos/{REPO}/contents/{encoded}?ref=main", token=token)
+    payload = request_json(
+        f"https://api.github.com/repos/{REPO}/contents/{encoded}?ref=main",
+        token=token,
+        user_agent="WP-data-monitor",
+    )
     content = "".join(str(payload.get("content", "")).split())
     if payload.get("encoding") != "base64" or not content:
         raise RuntimeError("Unsupported upstream manifest payload.")
@@ -87,6 +73,7 @@ def is_trade_day(token: str, day: str) -> bool:
             "params": {"exchange": "SSE", "start_date": day, "end_date": day},
             "fields": "cal_date,is_open",
         },
+        user_agent="WP-data-monitor",
     )
     if int(payload.get("code", -1)) != 0:
         raise RuntimeError(f"Tushare trade_cal failed: {payload.get('msg')}")
@@ -101,6 +88,7 @@ def repair_run_active(token: str) -> bool:
     payload = request_json(
         f"https://api.github.com/repos/{REPO}/actions/workflows/{WORKFLOW}/runs?event=workflow_dispatch&per_page=10",
         token=token,
+        user_agent="WP-data-monitor",
     )
     return any(run.get("status") in {"queued", "in_progress", "waiting", "pending"} for run in payload.get("workflow_runs", []))
 
@@ -111,6 +99,7 @@ def dispatch_repair(token: str) -> None:
         token=token,
         method="POST",
         payload={"ref": "main", "inputs": {"mode": "due"}},
+        user_agent="WP-data-monitor",
     )
 
 
