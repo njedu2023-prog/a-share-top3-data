@@ -1,13 +1,13 @@
 {
-  "generated_at": "2026-07-17 11:20:02",
-  "scheduled_slot": "2026-07-17 11:15:00",
+  "generated_at": "2026-07-17 13:05:21",
+  "scheduled_slot": "2026-07-17 12:55:00",
   "trigger_event": "push",
   "status": "ok",
   "source_trade_date": "20260717",
   "expected_trade_date": "20260717",
-  "row_count": 15,
-  "candidate_count": 15,
-  "history_feature_rows": 15,
+  "row_count": 13,
+  "candidate_count": 13,
+  "history_feature_rows": 13,
   "history_feature_coverage_pct": 100.0,
   "history_features_ready": true,
   "columns": [
