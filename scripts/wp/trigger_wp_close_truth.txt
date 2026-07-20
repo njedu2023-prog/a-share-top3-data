@@ -1,3 +1,3 @@
 WP close-truth trigger.
 
-2026-07-20 15:24:41 +0800 target_trade_date=20260720
+2026-07-20 15:52:34 +0800 target_trade_date=20260720
