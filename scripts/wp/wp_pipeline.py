@@ -135,6 +135,8 @@ def merge_stock_basic_fields(out: pd.DataFrame, stock_basic: pd.DataFrame) -> pd
     keep = ["ts_code", *(field for field in fields if field in stock_basic.columns)]
     basic = stock_basic[keep].drop_duplicates("ts_code").copy()
     basic["ts_code"] = basic["ts_code"].astype(str).str.strip()
+    # Realtime quotes also contain funds and ETFs; stock_basic defines the equity universe.
+    out = out[out["ts_code"].isin(set(basic["ts_code"]))].copy()
     renamed = {field: f"_stock_basic_{field}" for field in fields if field in basic.columns}
     basic = basic.rename(columns=renamed)
     merged = out.merge(basic, on="ts_code", how="left")
