@@ -71,7 +71,8 @@ jobs:
           MINUTE_FREQ: "1min"
           MAX_MINUTE_SYMBOLS: "6000"
           WP_INTRADAY_MIN_PCT: "8"
-          WP_DATA_RUN_MODE: ${{ github.event_name == 'schedule' && 'due' || github.event_name == 'push' && 'due' || github.event.inputs.mode || 'once' }}
+          WP_DATA_RUN_MODE: ${{ github.event_name == 'schedule' && 'due' || github.event_name == 'push' && 'once' || github.event.inputs.mode || 'once' }}
+          WP_TARGET_SLOT: ${{ steps.due.outputs.target_slot }}
           WP_SCHEDULE_GRACE_SECONDS: "600"
           WP_TRIGGER_REPO: "njedu2023-prog/WP"
           WP_TRIGGER_TOKEN: ${{ secrets.WP_TRIGGER_TOKEN || secrets.GH_PAT || secrets.PERSONAL_ACCESS_TOKEN }}
