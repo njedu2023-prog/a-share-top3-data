@@ -127,6 +127,29 @@ def parse_yyyymmdd(series: pd.Series) -> pd.Series:
     return pd.to_datetime(text, format="%Y%m%d", errors="coerce")
 
 
+def merge_stock_basic_fields(out: pd.DataFrame, stock_basic: pd.DataFrame) -> pd.DataFrame:
+    if stock_basic.empty or "ts_code" not in stock_basic.columns:
+        return out
+
+    fields = ["name", "industry", "market", "list_date"]
+    keep = ["ts_code", *(field for field in fields if field in stock_basic.columns)]
+    basic = stock_basic[keep].drop_duplicates("ts_code").copy()
+    basic["ts_code"] = basic["ts_code"].astype(str).str.strip()
+    renamed = {field: f"_stock_basic_{field}" for field in fields if field in basic.columns}
+    basic = basic.rename(columns=renamed)
+    merged = out.merge(basic, on="ts_code", how="left")
+
+    for field, source_field in renamed.items():
+        source = merged[source_field]
+        if field in merged.columns:
+            current = merged[field]
+            has_value = current.fillna("").astype(str).str.strip().ne("")
+            merged[field] = current.where(has_value, source)
+        else:
+            merged[field] = source
+    return merged.drop(columns=list(renamed.values()))
+
+
 def latest_trade_date(*frames: pd.DataFrame) -> str:
     env_date = os.environ.get("TRADE_DATE", "").strip()
     if len(env_date) == 8 and env_date.isdigit():
@@ -316,9 +339,7 @@ def build_from_latest_data() -> pd.DataFrame:
     if not daily_basic.empty:
         keep = [c for c in ["ts_code", "turnover_rate", "volume_ratio", "total_mv", "float_mv"] if c in daily_basic.columns]
         out = out.merge(daily_basic[keep].drop_duplicates("ts_code"), on="ts_code", how="left")
-    if not stock_basic.empty:
-        keep = [c for c in ["ts_code", "name", "industry", "market", "list_date"] if c in stock_basic.columns]
-        out = out.merge(stock_basic[keep].drop_duplicates("ts_code"), on="ts_code", how="left")
+    out = merge_stock_basic_fields(out, stock_basic)
     if not stk_limit.empty:
         keep = [c for c in ["ts_code", "up_limit", "down_limit"] if c in stk_limit.columns]
         out = out.merge(stk_limit[keep].drop_duplicates("ts_code"), on="ts_code", how="left")
