@@ -23,7 +23,15 @@ def main() -> None:
     if mode in {"once", "session"}:
         should_run = True
         reason = f"explicit {mode} mode"
-        target_slot = ""
+        if mode == "once":
+            decision = due_decision(now_cn(), MANIFEST_PATH)
+            target_slot = (
+                decision.target_slot.strftime("%Y-%m-%d %H:%M:%S")
+                if decision.target_slot
+                else ""
+            )
+        else:
+            target_slot = ""
     else:
         decision = due_decision(now_cn(), MANIFEST_PATH)
         should_run = decision.should_run
