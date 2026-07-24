@@ -1,7 +1,7 @@
 {
-  "requested_trade_date": null,
+  "requested_trade_date": "20260724",
   "resolved_trade_date": "20260724",
-  "generated_at_bj": "2026-07-24 19:39:30",
+  "generated_at_bj": "2026-07-24 20:25:27",
   "jobs": [
     {
       "key": "limit_list_d",
