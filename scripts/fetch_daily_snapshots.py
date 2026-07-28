@@ -425,19 +425,35 @@ def build_jobs(pro, trade_date: str) -> List[FetchJob]:
     )
 
     # 2) limit_break_d（可选）
-    if hasattr(pro, "limit_break_d"):
-        limit_break_fields = "trade_date,ts_code,name,open_times,first_time,last_time,fd_amount"
-        jobs.append(
-            FetchJob(
-                key="limit_break_d",
-                fn=pro.limit_break_d,
-                kwargs={"trade_date": trade_date, "fields": limit_break_fields},
-                columns=_fields_to_columns(limit_break_fields) or (schema_min_code_date + ["open_times"]),
-                allow_empty=True,
-                required=False,
-                note="炸板/开板（日）（显式拉取 open_times）",
-            )
+    # tushare pro_api dynamically exposes arbitrary attribute names, so hasattr()
+    # cannot prove that this endpoint exists. Keep the output contract, but avoid
+    # retrying a known-unsupported endpoint on every daily run.
+    limit_break_fields = "trade_date,ts_code,name,open_times,first_time,last_time,fd_amount"
+
+    def _limit_break_d_optional(**kwargs):
+        if not _env_bool("ENABLE_LIMIT_BREAK", "0"):
+            print("[SKIP] limit_break_d disabled; write an empty schema-compatible snapshot")
+            return pd.DataFrame()
+        try:
+            return pro.limit_break_d(**kwargs)
+        except Exception as e:
+            if "请指定正确的接口名" in str(e):
+                print(f"[LIMIT_BREAK_D-UNAVAILABLE] {repr(e)}")
+                return pd.DataFrame()
+            raise
+
+    _limit_break_d_optional.__name__ = "limit_break_d_optional"
+    jobs.append(
+        FetchJob(
+            key="limit_break_d",
+            fn=_limit_break_d_optional,
+            kwargs={"trade_date": trade_date, "fields": limit_break_fields},
+            columns=_fields_to_columns(limit_break_fields) or (schema_min_code_date + ["open_times"]),
+            allow_empty=True,
+            required=False,
+            note="炸板/开板（日）（可选；默认关闭不稳定接口并写出空表头）",
         )
+    )
 
     # 3) 日线行情
     daily_fields = "ts_code,trade_date,open,high,low,close,pre_close,vol,amount,pct_chg"

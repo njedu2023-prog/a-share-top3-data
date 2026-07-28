@@ -5,6 +5,12 @@ on:
     # Mon-Fri 19:10 Beijing (UTC+8) == 11:10 UTC.
     - cron: "10 11 * * 1-5"
 
+  # GitHub scheduled events can be delayed. A late Daily Data Fetch completion
+  # provides a second path into the same idempotent chain after 19:10 Beijing.
+  workflow_run:
+    workflows: ["Daily Data Fetch"]
+    types: [completed]
+
   workflow_dispatch:
     inputs:
       trade_date:
@@ -28,8 +34,12 @@ concurrency:
 
 jobs:
   orchestrate:
+    if: >-
+      github.event_name != 'workflow_run' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.head_branch == 'main')
     runs-on: ubuntu-latest
-    timeout-minutes: 180
+    timeout-minutes: 360
     env:
       TZ: Asia/Shanghai
       PYTHONUTF8: "1"
@@ -66,5 +76,8 @@ jobs:
           fi
           if [ "${{ github.event.inputs.skip_calendar || false }}" = "true" ]; then
             args+=(--skip-calendar)
+          fi
+          if [ "${{ github.event_name }}" = "workflow_run" ]; then
+            args+=(--not-before "19:10")
           fi
           python orchestrator/top10_chain_orchestrator.py "${args[@]}"

@@ -41,10 +41,22 @@ PREMIUM_WF = "run_premium.yml"
 A_TOP10_HOME = "https://njedu2023-prog.github.io/a-top10/"
 DECISION_HOME = "https://njedu2023-prog.github.io/top10-decision/decision.html"
 PREMIUM_HOME = "https://njedu2023-prog.github.io/top10-decision/docs/reports/premium_latest.html"
+CORE_DATA_FILES = ("daily.csv", "daily_basic.csv", "stk_limit.csv", "limit_list_d.csv")
+NONEMPTY_DATA_JOBS = ("daily", "daily_basic", "stk_limit")
+RETRYABLE_CONCLUSIONS = {"cancelled", "stale", "timed_out"}
 
 
 class ChainError(RuntimeError):
     pass
+
+
+class WorkflowRunError(ChainError):
+    def __init__(self, label: str, conclusion: str, run: Dict[str, Any], detail: str = "") -> None:
+        self.label = label
+        self.conclusion = conclusion
+        self.run = run
+        suffix = f"\n{detail}" if detail else ""
+        super().__init__(f"{label} failed: {conclusion} {run.get('html_url')}{suffix}")
 
 
 def log(msg: str) -> None:
@@ -138,6 +150,56 @@ def wait_url(url: str, label: str, timeout_s: int = 900, contains: str = "") -> 
     raise ChainError(f"publication timeout: {label} {url} {last}")
 
 
+def data_outputs_status(trade_date: str) -> Tuple[bool, str]:
+    roots = (
+        f"data/raw/{trade_date[:4]}/{trade_date}",
+        "data/latest",
+    )
+    try:
+        for root in roots:
+            meta_url = raw_url(DATA_REPO, f"{root}/_meta.json")
+            meta = json.loads(get_text(meta_url))
+            if str(meta.get("resolved_trade_date") or "") != trade_date:
+                return False, f"{root}/_meta.json resolved_trade_date is not {trade_date}"
+
+            jobs = {
+                str(item.get("key")): item
+                for item in meta.get("jobs", [])
+                if isinstance(item, dict) and item.get("key")
+            }
+            for key in NONEMPTY_DATA_JOBS:
+                item = jobs.get(key) or {}
+                if item.get("status") != "ok" or int(item.get("rows") or 0) <= 0:
+                    return False, f"{root}/_meta.json job {key} is not a non-empty success"
+
+            for filename in CORE_DATA_FILES:
+                url = raw_url(DATA_REPO, f"{root}/{filename}")
+                if not url_ok(url):
+                    return False, f"{root}/{filename} is not accessible"
+                if filename == "limit_list_d.csv":
+                    lines = [line for line in get_text(url).splitlines() if line.strip()]
+                    if len(lines) > 1 and trade_date not in "\n".join(lines[1:]):
+                        return False, f"{root}/{filename} contains rows from another trade date"
+    except Exception as exc:
+        return False, f"{type(exc).__name__}: {exc}"
+    return True, "core raw/latest snapshots are current and accessible"
+
+
+def wait_data_outputs(trade_date: str, timeout_s: int = 900) -> None:
+    deadline = time.time() + timeout_s
+    last = ""
+    while time.time() < deadline:
+        ok, detail = data_outputs_status(trade_date)
+        if ok:
+            log(f"[publish] data core snapshots: OK trade_date={trade_date}")
+            return
+        if detail != last:
+            log(f"[publish] waiting for data core snapshots: {detail}")
+            last = detail
+        time.sleep(20)
+    raise ChainError(f"data publication timeout for {trade_date}: {last}")
+
+
 def tushare_trade_day(trade_date: str, token: str) -> Optional[bool]:
     if not token:
         return None
@@ -206,16 +268,25 @@ def dispatch(repo: str, workflow: str, token: str, inputs: Dict[str, str]) -> No
     gh_post(f"/repos/{repo}/actions/workflows/{urllib.parse.quote(workflow)}/dispatches", token, payload)
 
 
-def trigger_or_attach(repo: str, workflow: str, token: str, inputs: Dict[str, str], label: str, since: dt.datetime) -> Dict[str, Any]:
-    run = active_run(repo, workflow, token, since)
+def trigger_or_attach(
+    repo: str,
+    workflow: str,
+    token: str,
+    inputs: Dict[str, str],
+    label: str,
+    since: dt.datetime,
+    active_since: Optional[dt.datetime] = None,
+) -> Dict[str, Any]:
+    run = active_run(repo, workflow, token, active_since or since)
     if run:
         log(f"[{label}] attach active run #{run['run_number']} {run['html_url']}")
         return run
     log(f"[{label}] dispatch {repo}/{workflow} inputs={inputs}")
+    dispatched_at = now_utc() - dt.timedelta(seconds=5)
     dispatch(repo, workflow, token, inputs)
     deadline = time.time() + 180
     while time.time() < deadline:
-        run = active_run(repo, workflow, token, since) or recent_success(repo, workflow, token, since)
+        run = active_run(repo, workflow, token, dispatched_at) or recent_success(repo, workflow, token, dispatched_at)
         if run:
             log(f"[{label}] run found #{run['run_number']} {run['status']} {run.get('conclusion')} {run['html_url']}")
             return run
@@ -265,10 +336,46 @@ def wait_run(repo: str, workflow: str, token: str, run: Dict[str, Any], label: s
             last = state
         if cur.get("status") == "completed":
             if cur.get("conclusion") != "success":
-                raise ChainError(f"{label} failed: {cur.get('conclusion')} {cur.get('html_url')}\n{failed_log_excerpt(repo, run_id, token)}")
+                conclusion = str(cur.get("conclusion") or "unknown")
+                detail = "" if conclusion in RETRYABLE_CONCLUSIONS else failed_log_excerpt(repo, run_id, token)
+                raise WorkflowRunError(label, conclusion, cur, detail)
             return cur
         time.sleep(20)
-    raise ChainError(f"{label} timeout: #{run.get('run_number')} {run.get('html_url')}")
+    raise WorkflowRunError(label, "monitor_timeout", run)
+
+
+def execute_workflow(
+    repo: str,
+    workflow: str,
+    token: str,
+    inputs: Dict[str, str],
+    label: str,
+    timeout_s: int,
+    *,
+    active_since: Optional[dt.datetime] = None,
+    retry_count: int = 1,
+) -> Tuple[Dict[str, Any], dt.datetime]:
+    for attempt in range(retry_count + 1):
+        attempt_started = now_utc()
+        run = trigger_or_attach(
+            repo,
+            workflow,
+            token,
+            inputs,
+            label,
+            attempt_started,
+            active_since=active_since if attempt == 0 else attempt_started,
+        )
+        try:
+            return wait_run(repo, workflow, token, run, label, timeout_s), attempt_started
+        except WorkflowRunError as exc:
+            if exc.conclusion not in RETRYABLE_CONCLUSIONS or attempt >= retry_count:
+                raise
+            log(
+                f"[{label}] transient conclusion={exc.conclusion}; "
+                f"dispatch one retry ({attempt + 1}/{retry_count})"
+            )
+    raise ChainError(f"{label}: retry loop ended unexpectedly")
 
 
 def wait_pages(repo: str, token: str, since: dt.datetime, label: str, timeout_s: int = 900) -> None:
@@ -314,10 +421,20 @@ def wait_pages(repo: str, token: str, since: dt.datetime, label: str, timeout_s:
 
 def wait_premium(token: str, since: dt.datetime, timeout_s: int = 3000) -> Optional[Dict[str, Any]]:
     deadline = time.time() + timeout_s
+    ignored_run_ids = set()
     while time.time() < deadline:
         for run in workflow_runs(DECISION_REPO, PREMIUM_WF, token, 20):
-            if parse_time(run["created_at"]) >= since:
+            run_id = int(run["id"])
+            if parse_time(run["created_at"]) < since or run_id in ignored_run_ids:
+                continue
+            try:
                 return wait_run(DECISION_REPO, PREMIUM_WF, token, run, "premium", timeout_s)
+            except WorkflowRunError as exc:
+                if exc.conclusion not in RETRYABLE_CONCLUSIONS:
+                    raise
+                ignored_run_ids.add(run_id)
+                log(f"[premium] ignore superseded run conclusion={exc.conclusion} {run.get('html_url')}")
+                break
         time.sleep(15)
     log("[premium] no run observed after decision; continue")
     return None
@@ -337,6 +454,42 @@ def decision_report_for_signal(trade_date: str) -> Optional[str]:
     return None
 
 
+def chain_outputs_status(trade_date: str) -> Tuple[bool, str, Optional[str]]:
+    data_ok, detail = data_outputs_status(trade_date)
+    if not data_ok:
+        return False, detail, None
+
+    required_urls = (
+        page_url("a-top10", f"outputs/predict_top10_{trade_date}.md"),
+        raw_url(TOP10_REPO, f"outputs/decisio/pred_decisio_{trade_date}.csv"),
+        DECISION_HOME,
+    )
+    for url in required_urls:
+        if not url_ok(url):
+            return False, f"published output is not accessible: {url}", None
+
+    report = decision_report_for_signal(trade_date)
+    if not report:
+        return False, f"decision report is not published for signal_date={trade_date}", None
+    try:
+        if trade_date not in get_text(PREMIUM_HOME):
+            return False, f"premium latest does not contain {trade_date}", report
+    except Exception as exc:
+        return False, f"premium latest unavailable: {type(exc).__name__}: {exc}", report
+    return True, "all chain outputs are already published", report
+
+
+def not_before_reached(value: str) -> Tuple[bool, str]:
+    if not re.fullmatch(r"\d{2}:\d{2}", value):
+        raise ChainError(f"invalid not-before time={value!r}; expect HH:MM")
+    hour, minute = (int(part) for part in value.split(":"))
+    if not (0 <= hour <= 23 and 0 <= minute <= 59):
+        raise ChainError(f"invalid not-before time={value!r}; expect HH:MM")
+    now_bj = dt.datetime.now(TZ)
+    target = now_bj.replace(hour=hour, minute=minute, second=0, microsecond=0)
+    return now_bj >= target, now_bj.strftime("%Y-%m-%d %H:%M:%S %Z")
+
+
 def append_summary(lines: List[str]) -> None:
     text = "\n".join(lines) + "\n"
     print(text)
@@ -350,6 +503,7 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--trade-date", default="")
     ap.add_argument("--skip-calendar", action="store_true")
+    ap.add_argument("--not-before", default="", help="Skip before this Beijing time (HH:MM)")
     args = ap.parse_args()
 
     token = os.getenv("ORCHESTRATOR_TOKEN", "").strip()
@@ -363,22 +517,68 @@ def main() -> int:
     started = now_utc()
     summary = ["# A-share Top10 Chain Orchestrator", "", f"- trade_date: `{trade_date}`", f"- started_at_utc: `{iso(started)}`"]
 
+    if args.not_before:
+        reached, now_bj = not_before_reached(args.not_before)
+        if not reached:
+            summary.extend([
+                f"- status: `skipped_before_{args.not_before.replace(':', '')}`",
+                f"- current_time_bj: `{now_bj}`",
+            ])
+            append_summary(summary)
+            return 0
+
     if not args.skip_calendar and not is_trade_day(trade_date, tushare_token):
         summary.append("- status: `skipped_non_trading_day`")
         append_summary(summary)
         return 0
 
-    data_run = trigger_or_attach(DATA_REPO, DATA_WF, token, {"trade_date": trade_date}, "data", started)
-    data_done = wait_run(DATA_REPO, DATA_WF, token, data_run, "data", 3600)
-    summary.append(f"- data: `success` [#{data_done['run_number']}]({data_done['html_url']})")
-    y = trade_date[:4]
-    wait_url(raw_url(DATA_REPO, f"data/raw/{y}/{trade_date}/_meta.json"), "data raw meta", 600)
-    wait_url(raw_url(DATA_REPO, f"data/raw/{y}/{trade_date}/daily.csv"), "data raw daily", 600)
-    wait_url(raw_url(DATA_REPO, "data/latest/_meta.json"), "data latest meta", 600, contains=trade_date)
+    chain_ready, chain_detail, existing_report = chain_outputs_status(trade_date)
+    if chain_ready:
+        summary.extend([
+            "- status: `already_complete`",
+            f"- detail: {chain_detail}",
+            f"- a-top10_report: {A_TOP10_HOME}",
+            f"- decision_report: {DECISION_HOME}",
+            f"- decision_report_md: {existing_report}",
+            f"- premium_report: {PREMIUM_HOME}",
+            f"- finished_at_utc: `{iso(now_utc())}`",
+        ])
+        append_summary(summary)
+        return 0
+    log(f"[dedupe] chain is not complete: {chain_detail}")
 
-    top10_start = now_utc()
-    top10_run = trigger_or_attach(TOP10_REPO, TOP10_WF, token, {"trade_date": trade_date}, "a-top10", top10_start)
-    top10_done = wait_run(TOP10_REPO, TOP10_WF, token, top10_run, "a-top10", 3600)
+    day_start_bj = dt.datetime.strptime(trade_date, "%Y%m%d").replace(tzinfo=TZ)
+    day_start_utc = day_start_bj.astimezone(dt.timezone.utc)
+    data_ready, data_detail = data_outputs_status(trade_date)
+    if data_ready:
+        data_done = recent_success(DATA_REPO, DATA_WF, token, day_start_utc)
+        log(f"[data] reuse current snapshots: {data_detail}")
+        if data_done:
+            summary.append(f"- data: `reused` [#{data_done['run_number']}]({data_done['html_url']})")
+        else:
+            summary.append("- data: `reused` (core raw/latest snapshots verified)")
+    else:
+        log(f"[data] current snapshots unavailable: {data_detail}")
+        data_done, _ = execute_workflow(
+            DATA_REPO,
+            DATA_WF,
+            token,
+            {"trade_date": trade_date},
+            "data",
+            3600,
+            active_since=day_start_utc,
+        )
+        summary.append(f"- data: `success` [#{data_done['run_number']}]({data_done['html_url']})")
+    wait_data_outputs(trade_date, 900)
+
+    top10_done, top10_start = execute_workflow(
+        TOP10_REPO,
+        TOP10_WF,
+        token,
+        {"trade_date": trade_date},
+        "a-top10",
+        3600,
+    )
     summary.append(f"- a-top10: `success` [#{top10_done['run_number']}]({top10_done['html_url']})")
     wait_pages(TOP10_REPO, token, top10_start, "a-top10 pages", 900)
     wait_url(A_TOP10_HOME, "a-top10 home", 600)
@@ -386,19 +586,24 @@ def main() -> int:
     wait_url(raw_url(TOP10_REPO, f"outputs/decisio/pred_decisio_{trade_date}.csv"), "a-top10 pred csv", 900)
     summary.append(f"- a-top10_report: {A_TOP10_HOME}")
 
-    decision_start = now_utc()
-    decision_run = trigger_or_attach(DECISION_REPO, DECISION_WF, token, {"trade_date": trade_date}, "decision", decision_start)
-    decision_done = wait_run(DECISION_REPO, DECISION_WF, token, decision_run, "decision", 4200)
+    decision_done, decision_start = execute_workflow(
+        DECISION_REPO,
+        DECISION_WF,
+        token,
+        {"trade_date": trade_date},
+        "decision",
+        7200,
+    )
     summary.append(f"- decision: `success` [#{decision_done['run_number']}]({decision_done['html_url']})")
     premium_done = wait_premium(token, decision_start, 3000)
     if premium_done:
         summary.append(f"- premium: `success` [#{premium_done['run_number']}]({premium_done['html_url']})")
     wait_pages(DECISION_REPO, token, decision_start, "top10-decision pages", 1200)
-    wait_url(DECISION_HOME, "decision dashboard", 900)
+    wait_url(DECISION_HOME, "decision dashboard", 900, contains=trade_date)
     report = decision_report_for_signal(trade_date)
     if not report:
         raise ChainError(f"cannot find decision report for signal_date={trade_date}")
-    wait_url(PREMIUM_HOME, "premium latest", 900)
+    wait_url(PREMIUM_HOME, "premium latest", 900, contains=trade_date)
     summary.extend([
         f"- decision_report: {DECISION_HOME}",
         f"- decision_report_md: {report}",
