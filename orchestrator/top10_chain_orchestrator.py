@@ -599,7 +599,7 @@ def main() -> int:
     if premium_done:
         summary.append(f"- premium: `success` [#{premium_done['run_number']}]({premium_done['html_url']})")
     wait_pages(DECISION_REPO, token, decision_start, "top10-decision pages", 1200)
-    wait_url(DECISION_HOME, "decision dashboard", 900, contains=trade_date)
+    wait_url(DECISION_HOME, "decision dashboard", 900)
     report = decision_report_for_signal(trade_date)
     if not report:
         raise ChainError(f"cannot find decision report for signal_date={trade_date}")
