@@ -1,1 +1,1 @@
-2026-07-28 16:20:00 +08:00 target_slot=2026-07-28 16:20:00 self_heal=final-wp stale_wp_manifest
+2026-07-30 16:13:30 +08:00 target_trade_date=20260730 self_heal=final-wp missing_close_truth_manifest
