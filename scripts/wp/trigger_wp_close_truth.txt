@@ -2,3 +2,4 @@ WP close-truth trigger.
 
 2026-07-30 16:21:20 +0800 target_trade_date=20260730 self_heal=final-wp missing_close_truth_manifest
 2026-07-31 16:11:03 +0800 target_trade_date=20260731 self_heal=final-wp missing_close_truth_manifest
+2026-08-03 16:13:00 +0800 target_trade_date=20260803 self_heal=final-wp missing_close_truth_manifest
