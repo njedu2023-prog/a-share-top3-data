@@ -1,7 +1,7 @@
 {
   "status": "ok",
   "trade_date": "20260804",
-  "generated_at": "2026-08-04 17:47:33",
+  "generated_at": "2026-08-04 18:48:02",
   "daily_rows": 5529,
   "stk_limit_rows": 7723,
   "source": "tushare_close_truth"
