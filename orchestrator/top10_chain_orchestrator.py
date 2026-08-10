@@ -37,9 +37,11 @@ DATA_WF = "daily_fetch.yml"
 TOP10_WF = "run_top10.yml"
 DECISION_WF = "run_decision_daily.yml"
 PREMIUM_WF = "run_premium.yml"
+V12_WF = "run_auction_v3.yml"
 
 A_TOP10_HOME = "https://njedu2023-prog.github.io/a-top10/"
 DECISION_HOME = "https://njedu2023-prog.github.io/top10-decision/decision.html"
+AUCTION_HOME = "https://njedu2023-prog.github.io/top10-decision/docs/reports/auction_v3_latest.html"
 PREMIUM_HOME = "https://njedu2023-prog.github.io/top10-decision/docs/reports/premium_latest.html"
 CORE_DATA_FILES = ("daily.csv", "daily_basic.csv", "stk_limit.csv", "limit_list_d.csv")
 NONEMPTY_DATA_JOBS = ("daily", "daily_basic", "stk_limit")
@@ -419,25 +421,36 @@ def wait_pages(repo: str, token: str, since: dt.datetime, label: str, timeout_s:
     log(f"[{label}] no Pages run observed; direct URL checks will decide")
 
 
-def wait_premium(token: str, since: dt.datetime, timeout_s: int = 3000) -> Optional[Dict[str, Any]]:
+def wait_followup_workflow(
+    token: str,
+    since: dt.datetime,
+    workflow: str,
+    label: str,
+    timeout_s: int = 3000,
+) -> Dict[str, Any]:
+    """Wait for one required workflow_run follow-up after Decision.
+
+    Premium and V12 share a non-cancelling writer lock, so either one can run
+    first. Both must reach a successful terminal state before final Pages can
+    be accepted.
+    """
     deadline = time.time() + timeout_s
     ignored_run_ids = set()
     while time.time() < deadline:
-        for run in workflow_runs(DECISION_REPO, PREMIUM_WF, token, 20):
+        for run in workflow_runs(DECISION_REPO, workflow, token, 20):
             run_id = int(run["id"])
             if parse_time(run["created_at"]) < since or run_id in ignored_run_ids:
                 continue
             try:
-                return wait_run(DECISION_REPO, PREMIUM_WF, token, run, "premium", timeout_s)
+                return wait_run(DECISION_REPO, workflow, token, run, label, timeout_s)
             except WorkflowRunError as exc:
                 if exc.conclusion not in RETRYABLE_CONCLUSIONS:
                     raise
                 ignored_run_ids.add(run_id)
-                log(f"[premium] ignore superseded run conclusion={exc.conclusion} {run.get('html_url')}")
+                log(f"[{label}] ignore superseded run conclusion={exc.conclusion} {run.get('html_url')}")
                 break
         time.sleep(15)
-    log("[premium] no run observed after decision; continue")
-    return None
+    raise ChainError(f"{label}: no run observed after decision")
 
 
 def decision_report_for_signal(trade_date: str) -> Optional[str]:
@@ -472,10 +485,12 @@ def chain_outputs_status(trade_date: str) -> Tuple[bool, str, Optional[str]]:
     if not report:
         return False, f"decision report is not published for signal_date={trade_date}", None
     try:
+        if trade_date not in get_text(AUCTION_HOME):
+            return False, f"auction latest does not contain signal_date={trade_date}", report
         if trade_date not in get_text(PREMIUM_HOME):
             return False, f"premium latest does not contain {trade_date}", report
     except Exception as exc:
-        return False, f"premium latest unavailable: {type(exc).__name__}: {exc}", report
+        return False, f"Decision/Premium latest unavailable: {type(exc).__name__}: {exc}", report
     return True, "all chain outputs are already published", report
 
 
@@ -540,6 +555,7 @@ def main() -> int:
             f"- a-top10_report: {A_TOP10_HOME}",
             f"- decision_report: {DECISION_HOME}",
             f"- decision_report_md: {existing_report}",
+            f"- decision_v12_report: {AUCTION_HOME}",
             f"- premium_report: {PREMIUM_HOME}",
             f"- finished_at_utc: `{iso(now_utc())}`",
         ])
@@ -595,18 +611,25 @@ def main() -> int:
         7200,
     )
     summary.append(f"- decision: `success` [#{decision_done['run_number']}]({decision_done['html_url']})")
-    premium_done = wait_premium(token, decision_start, 3000)
-    if premium_done:
-        summary.append(f"- premium: `success` [#{premium_done['run_number']}]({premium_done['html_url']})")
+    premium_done = wait_followup_workflow(
+        token, decision_start, PREMIUM_WF, "premium", 3000
+    )
+    summary.append(f"- premium: `success` [#{premium_done['run_number']}]({premium_done['html_url']})")
+    v12_done = wait_followup_workflow(
+        token, decision_start, V12_WF, "decision-v12", 3000
+    )
+    summary.append(f"- decision_v12: `success` [#{v12_done['run_number']}]({v12_done['html_url']})")
     wait_pages(DECISION_REPO, token, decision_start, "top10-decision pages", 1200)
     wait_url(DECISION_HOME, "decision dashboard", 900)
     report = decision_report_for_signal(trade_date)
     if not report:
         raise ChainError(f"cannot find decision report for signal_date={trade_date}")
+    wait_url(AUCTION_HOME, "decision auction latest", 900, contains=trade_date)
     wait_url(PREMIUM_HOME, "premium latest", 900, contains=trade_date)
     summary.extend([
         f"- decision_report: {DECISION_HOME}",
         f"- decision_report_md: {report}",
+        f"- decision_v12_report: {AUCTION_HOME}",
         f"- premium_report: {PREMIUM_HOME}",
         "- status: `success`",
         f"- finished_at_utc: `{iso(now_utc())}`",
