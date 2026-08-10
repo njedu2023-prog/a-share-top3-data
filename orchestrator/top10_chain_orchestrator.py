@@ -380,7 +380,7 @@ def execute_workflow(
     raise ChainError(f"{label}: retry loop ended unexpectedly")
 
 
-def wait_pages(repo: str, token: str, since: dt.datetime, label: str, timeout_s: int = 900) -> None:
+def wait_pages(repo: str, token: str, since: dt.datetime, label: str, timeout_s: int = 900) -> Dict[str, Any]:
     """Wait for the latest Pages deployment after `since`.
 
     GitHub cancels an older Pages deployment when a newer deployment is queued.
@@ -408,7 +408,7 @@ def wait_pages(repo: str, token: str, since: dt.datetime, label: str, timeout_s:
         if run.get("status") == "completed":
             conclusion = run.get("conclusion")
             if conclusion == "success":
-                return
+                return run
             if conclusion == "cancelled":
                 last_cancelled = run
                 time.sleep(10)
@@ -416,9 +416,11 @@ def wait_pages(repo: str, token: str, since: dt.datetime, label: str, timeout_s:
             raise ChainError(f"{label} failed: {conclusion} {run.get('html_url')}")
         time.sleep(10)
     if last_cancelled:
-        log(f"[{label}] latest observed Pages run was cancelled; direct URL checks will decide {last_cancelled.get('html_url')}")
-        return
-    log(f"[{label}] no Pages run observed; direct URL checks will decide")
+        raise ChainError(
+            f"{label}: latest observed Pages run was cancelled and no successful successor appeared "
+            f"{last_cancelled.get('html_url')}"
+        )
+    raise ChainError(f"{label}: no successful Pages run observed after {iso(since)}")
 
 
 def wait_followup_workflow(
@@ -476,6 +478,8 @@ def chain_outputs_status(trade_date: str) -> Tuple[bool, str, Optional[str]]:
         page_url("a-top10", f"outputs/predict_top10_{trade_date}.md"),
         raw_url(TOP10_REPO, f"outputs/decisio/pred_decisio_{trade_date}.csv"),
         DECISION_HOME,
+        page_url("top10-decision", f"docs/reports/auction_v3_{trade_date}.html"),
+        page_url("top10-decision", f"docs/reports/premium_{trade_date}.html"),
     )
     for url in required_urls:
         if not url_ok(url):
@@ -596,7 +600,10 @@ def main() -> int:
         3600,
     )
     summary.append(f"- a-top10: `success` [#{top10_done['run_number']}]({top10_done['html_url']})")
-    wait_pages(TOP10_REPO, token, top10_start, "a-top10 pages", 900)
+    top10_pages = wait_pages(TOP10_REPO, token, top10_start, "a-top10 pages", 900)
+    summary.append(
+        f"- a-top10_pages: `success` [#{top10_pages['run_number']}]({top10_pages['html_url']})"
+    )
     wait_url(A_TOP10_HOME, "a-top10 home", 600)
     wait_url(page_url("a-top10", f"outputs/predict_top10_{trade_date}.md"), "a-top10 top10 md", 900)
     wait_url(raw_url(TOP10_REPO, f"outputs/decisio/pred_decisio_{trade_date}.csv"), "a-top10 pred csv", 900)
@@ -619,12 +626,27 @@ def main() -> int:
         token, decision_start, V12_WF, "decision-v12", 3000
     )
     summary.append(f"- decision_v12: `success` [#{v12_done['run_number']}]({v12_done['html_url']})")
-    wait_pages(DECISION_REPO, token, decision_start, "top10-decision pages", 1200)
+    decision_pages = wait_pages(DECISION_REPO, token, decision_start, "top10-decision pages", 1200)
+    summary.append(
+        f"- decision_pages: `success` [#{decision_pages['run_number']}]({decision_pages['html_url']})"
+    )
     wait_url(DECISION_HOME, "decision dashboard", 900)
     report = decision_report_for_signal(trade_date)
     if not report:
         raise ChainError(f"cannot find decision report for signal_date={trade_date}")
+    wait_url(
+        page_url("top10-decision", f"docs/reports/auction_v3_{trade_date}.html"),
+        "decision auction dated",
+        900,
+        contains=trade_date,
+    )
     wait_url(AUCTION_HOME, "decision auction latest", 900, contains=trade_date)
+    wait_url(
+        page_url("top10-decision", f"docs/reports/premium_{trade_date}.html"),
+        "premium dated",
+        900,
+        contains=trade_date,
+    )
     wait_url(PREMIUM_HOME, "premium latest", 900, contains=trade_date)
     summary.extend([
         f"- decision_report: {DECISION_HOME}",
