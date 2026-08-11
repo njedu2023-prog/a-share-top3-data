@@ -1,7 +1,7 @@
 {
-  "generated_at": "2026-08-11 11:07:44",
+  "generated_at": "2026-08-11 11:09:43",
   "scheduled_slot": "2026-08-11 11:05:00",
-  "trigger_event": "workflow_dispatch",
+  "trigger_event": "schedule",
   "status": "ok",
   "source_trade_date": "20260811",
   "expected_trade_date": "20260811",
