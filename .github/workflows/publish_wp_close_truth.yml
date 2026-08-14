@@ -1,24 +1,14 @@
 name: Publish WP Close Truth
 
 on:
+  # WP-specific automatic and push-triggered runs paused 2026-08-14 by user request.
+  # Deliberate one-off runs remain available from the Actions UI.
   workflow_dispatch:
     inputs:
       trade_date:
         description: "Trade date YYYYMMDD (optional)"
         required: false
         default: ""
-  push:
-    branches:
-      - main
-    paths:
-      - scripts/wp/publish_close_truth.py
-      - scripts/wp/trigger_wp_close_truth.txt
-      - .github/workflows/publish_wp_close_truth.yml
-  schedule:
-    # Beijing 15:12 / 15:22 / 15:32 / 15:47 / 16:07.
-    # Repeated staggered attempts tolerate delayed or dropped GitHub cron events.
-    - cron: "12,22,32,47 7 * * 1-5"
-    - cron: "7 8 * * 1-5"
 
 permissions:
   contents: write

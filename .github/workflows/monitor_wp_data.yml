@@ -1,12 +1,9 @@
 name: Monitor WP Data
 
 on:
+  # WP-specific automatic and push-triggered runs paused 2026-08-14 by user request.
+  # Deliberate one-off runs remain available from the Actions UI.
   workflow_dispatch:
-  schedule:
-    # Independent offset heartbeat. If the primary cron is delayed or dropped,
-    # this workflow dispatches a guarded catch-up run in the same repository.
-    - cron: "4-59/5 1-3,5-7 * * 1-5"
-    - cron: "59 4 * * 1-5"
 
 permissions:
   actions: write
