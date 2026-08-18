@@ -1,7 +1,7 @@
 {
   "requested_trade_date": null,
   "resolved_trade_date": "20260818",
-  "generated_at_bj": "2026-08-18 17:20:37",
+  "generated_at_bj": "2026-08-18 17:58:39",
   "jobs": [
     {
       "key": "limit_list_d",
@@ -12,8 +12,8 @@
         "trade_date": "20260818",
         "fields": "trade_date,ts_code,name,limit_type,close,up_limit,down_limit,open_times,fd_amount,first_time,last_time,limit_times,up_stat,industry,turnover_ratio,amount,float_mv,total_mv"
       },
-      "status": "ok_empty",
-      "rows": 0,
+      "status": "ok",
+      "rows": 107,
       "error": null
     },
     {
@@ -147,26 +147,26 @@
     "limit_list_d_policy": {
       "policy": "CLOSE_EQ_UP_LIMIT",
       "trade_date": "20260818",
-      "input_rows": 0,
-      "output_rows": 0,
+      "input_rows": 107,
+      "output_rows": 80,
       "used_daily_close": 0,
-      "used_stk_limit": 0,
-      "filled_up_limit": 0,
-      "filled_down_limit": 0,
-      "warn": "limit_list_d missing ts_code or empty"
+      "used_stk_limit": 1,
+      "filled_up_limit": 107,
+      "filled_down_limit": 107,
+      "warn": ""
     },
     "limit_stage": {
-      "source": "",
-      "limit_list_rows": 0,
+      "source": "limit_list_d.limit_times",
+      "limit_list_rows": 80,
       "limit_step_rows": 19,
-      "rows": 0,
-      "limit_times_nonnull": 0,
-      "missing_reason": "limit_list_d_empty_or_missing_ts_code"
+      "rows": 80,
+      "limit_times_nonnull": 79,
+      "missing_reason": ""
     },
     "hot_board_tags": {
       "hot_board_topn": 10,
-      "hot_boards": 0,
-      "tagged": 0
+      "hot_boards": 10,
+      "tagged": 80
     }
   },
   "limit_step": {
@@ -205,11 +205,11 @@
     },
     "ok": true,
     "freq": "1min",
-    "wp_pre_candidates": 132,
+    "wp_pre_candidates": 52,
     "minute_end": "2026-08-18 15:00:00",
     "symbols_requested": 80,
-    "symbols_success": 0,
-    "symbols_failed": 80,
+    "symbols_success": 80,
+    "symbols_failed": 0,
     "errors": [],
     "fallback_symbol_query_count": 80
   },
@@ -247,7 +247,7 @@
   },
   "realtime_snapshot": {
     "ok": true,
-    "rows": 0,
+    "rows": 80,
     "columns": [
       "ts_code",
       "trade_date",
