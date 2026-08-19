@@ -1,7 +1,7 @@
 {
   "requested_trade_date": null,
   "resolved_trade_date": "20260819",
-  "generated_at_bj": "2026-08-19 17:58:43",
+  "generated_at_bj": "2026-08-19 18:24:50",
   "jobs": [
     {
       "key": "limit_list_d",
@@ -104,8 +104,8 @@
       "kwargs": {
         "trade_date": "20260819"
       },
-      "status": "ok_empty",
-      "rows": 0,
+      "status": "ok",
+      "rows": 78,
       "error": null
     },
     {
@@ -116,8 +116,8 @@
       "kwargs": {
         "trade_date": "20260819"
       },
-      "status": "ok_empty",
-      "rows": 0,
+      "status": "ok",
+      "rows": 1,
       "error": null
     }
   ],
@@ -207,15 +207,15 @@
     "freq": "1min",
     "wp_pre_candidates": 14,
     "minute_end": "2026-08-19 15:00:00",
-    "symbols_requested": 50,
-    "symbols_success": 50,
+    "symbols_requested": 80,
+    "symbols_success": 80,
     "symbols_failed": 0,
     "errors": [],
-    "fallback_symbol_query_count": 50
+    "fallback_symbol_query_count": 80
   },
   "intraday_features": {
     "ok": true,
-    "rows": 50,
+    "rows": 80,
     "columns": [
       "ts_code",
       "trade_date",
@@ -247,7 +247,7 @@
   },
   "realtime_snapshot": {
     "ok": true,
-    "rows": 50,
+    "rows": 80,
     "columns": [
       "ts_code",
       "trade_date",
