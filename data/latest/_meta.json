@@ -1,7 +1,7 @@
 {
   "requested_trade_date": null,
   "resolved_trade_date": "20260824",
-  "generated_at_bj": "2026-08-24 17:34:42",
+  "generated_at_bj": "2026-08-24 18:11:01",
   "jobs": [
     {
       "key": "limit_list_d",
@@ -12,8 +12,8 @@
         "trade_date": "20260824",
         "fields": "trade_date,ts_code,name,limit_type,close,up_limit,down_limit,open_times,fd_amount,first_time,last_time,limit_times,up_stat,industry,turnover_ratio,amount,float_mv,total_mv"
       },
-      "status": "ok_empty",
-      "rows": 0,
+      "status": "ok",
+      "rows": 73,
       "error": null
     },
     {
@@ -104,8 +104,8 @@
       "kwargs": {
         "trade_date": "20260824"
       },
-      "status": "ok_empty",
-      "rows": 0,
+      "status": "ok",
+      "rows": 64,
       "error": null
     },
     {
@@ -116,8 +116,8 @@
       "kwargs": {
         "trade_date": "20260824"
       },
-      "status": "ok_empty",
-      "rows": 0,
+      "status": "ok",
+      "rows": 1,
       "error": null
     }
   ],
@@ -147,26 +147,26 @@
     "limit_list_d_policy": {
       "policy": "CLOSE_EQ_UP_LIMIT",
       "trade_date": "20260824",
-      "input_rows": 0,
-      "output_rows": 0,
+      "input_rows": 73,
+      "output_rows": 46,
       "used_daily_close": 0,
-      "used_stk_limit": 0,
-      "filled_up_limit": 0,
-      "filled_down_limit": 0,
-      "warn": "limit_list_d missing ts_code or empty"
+      "used_stk_limit": 1,
+      "filled_up_limit": 73,
+      "filled_down_limit": 73,
+      "warn": ""
     },
     "limit_stage": {
-      "source": "",
-      "limit_list_rows": 0,
+      "source": "limit_list_d.limit_times",
+      "limit_list_rows": 46,
       "limit_step_rows": 10,
-      "rows": 0,
-      "limit_times_nonnull": 0,
-      "missing_reason": "limit_list_d_empty_or_missing_ts_code"
+      "rows": 46,
+      "limit_times_nonnull": 46,
+      "missing_reason": ""
     },
     "hot_board_tags": {
       "hot_board_topn": 10,
-      "hot_boards": 0,
-      "tagged": 0
+      "hot_boards": 10,
+      "tagged": 46
     }
   },
   "limit_step": {
@@ -205,7 +205,7 @@
     },
     "ok": true,
     "freq": "1min",
-    "wp_pre_candidates": 84,
+    "wp_pre_candidates": 38,
     "minute_end": "2026-08-24 15:00:00",
     "symbols_requested": 80,
     "symbols_success": 80,
