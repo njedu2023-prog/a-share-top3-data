@@ -1,7 +1,7 @@
 {
-  "requested_trade_date": "20260827",
+  "requested_trade_date": null,
   "resolved_trade_date": "20260827",
-  "generated_at_bj": "2026-08-27 19:23:14",
+  "generated_at_bj": "2026-08-28 03:19:03",
   "jobs": [
     {
       "key": "limit_list_d",
@@ -206,12 +206,12 @@
     "ok": true,
     "freq": "1min",
     "wp_pre_candidates": 103,
-    "minute_end": "2026-08-27 15:00:00",
+    "minute_end": "",
     "symbols_requested": 80,
-    "symbols_success": 80,
+    "symbols_success": 0,
     "symbols_failed": 0,
     "errors": [],
-    "fallback_symbol_query_count": 80
+    "skip_reason": "REALTIME_MINUTE_ONLY enabled; trade_date 20260827 is not today 20260828"
   },
   "intraday_features": {
     "ok": true,
@@ -247,7 +247,7 @@
   },
   "realtime_snapshot": {
     "ok": true,
-    "rows": 80,
+    "rows": 0,
     "columns": [
       "ts_code",
       "trade_date",
