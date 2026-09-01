@@ -1,7 +1,7 @@
 {
-  "requested_trade_date": "20260901",
+  "requested_trade_date": null,
   "resolved_trade_date": "20260901",
-  "generated_at_bj": "2026-09-01 19:16:41",
+  "generated_at_bj": "2026-09-01 21:45:57",
   "jobs": [
     {
       "key": "limit_list_d",
@@ -32,8 +32,8 @@
     {
       "key": "daily",
       "note": "日线行情（OHLCV+amount）",
-      "allow_empty": true,
-      "required": false,
+      "allow_empty": false,
+      "required": true,
       "kwargs": {
         "trade_date": "20260901",
         "fields": "ts_code,trade_date,open,high,low,close,pre_close,vol,amount,pct_chg"
@@ -45,8 +45,8 @@
     {
       "key": "stk_limit",
       "note": "涨跌停价（限制价格）",
-      "allow_empty": true,
-      "required": false,
+      "allow_empty": false,
+      "required": true,
       "kwargs": {
         "trade_date": "20260901",
         "fields": "ts_code,trade_date,up_limit,down_limit"
@@ -58,8 +58,8 @@
     {
       "key": "daily_basic",
       "note": "每日指标（换手/市值/量比）",
-      "allow_empty": true,
-      "required": false,
+      "allow_empty": false,
+      "required": true,
       "kwargs": {
         "trade_date": "20260901",
         "fields": "ts_code,trade_date,turnover_rate,turnover_rate_f,volume_ratio,total_mv,float_mv"
