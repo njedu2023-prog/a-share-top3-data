@@ -1,7 +1,7 @@
 {
   "requested_trade_date": "20260901",
   "resolved_trade_date": "20260901",
-  "generated_at_bj": "2026-09-01 01:59:09",
+  "generated_at_bj": "2026-09-01 19:16:41",
   "jobs": [
     {
       "key": "limit_list_d",
@@ -12,8 +12,8 @@
         "trade_date": "20260901",
         "fields": "trade_date,ts_code,name,limit_type,close,up_limit,down_limit,open_times,fd_amount,first_time,last_time,limit_times,up_stat,industry,turnover_ratio,amount,float_mv,total_mv"
       },
-      "status": "ok_empty",
-      "rows": 0,
+      "status": "ok",
+      "rows": 89,
       "error": null
     },
     {
@@ -38,8 +38,8 @@
         "trade_date": "20260901",
         "fields": "ts_code,trade_date,open,high,low,close,pre_close,vol,amount,pct_chg"
       },
-      "status": "ok_empty",
-      "rows": 0,
+      "status": "ok",
+      "rows": 5546,
       "error": null
     },
     {
@@ -51,8 +51,8 @@
         "trade_date": "20260901",
         "fields": "ts_code,trade_date,up_limit,down_limit"
       },
-      "status": "ok_empty",
-      "rows": 0,
+      "status": "ok",
+      "rows": 7771,
       "error": null
     },
     {
@@ -64,8 +64,8 @@
         "trade_date": "20260901",
         "fields": "ts_code,trade_date,turnover_rate,turnover_rate_f,volume_ratio,total_mv,float_mv"
       },
-      "status": "ok_empty",
-      "rows": 0,
+      "status": "ok",
+      "rows": 5546,
       "error": null
     },
     {
@@ -79,7 +79,7 @@
         "fields": "ts_code,symbol,name,area,industry,market,list_date"
       },
       "status": "ok",
-      "rows": 5551,
+      "rows": 5553,
       "error": null
     },
     {
@@ -104,8 +104,8 @@
       "kwargs": {
         "trade_date": "20260901"
       },
-      "status": "ok_empty",
-      "rows": 0,
+      "status": "ok",
+      "rows": 68,
       "error": null
     },
     {
@@ -116,8 +116,8 @@
       "kwargs": {
         "trade_date": "20260901"
       },
-      "status": "ok_empty",
-      "rows": 0,
+      "status": "ok",
+      "rows": 1,
       "error": null
     }
   ],
@@ -147,32 +147,32 @@
     "limit_list_d_policy": {
       "policy": "CLOSE_EQ_UP_LIMIT",
       "trade_date": "20260901",
-      "input_rows": 0,
-      "output_rows": 0,
+      "input_rows": 89,
+      "output_rows": 83,
       "used_daily_close": 0,
-      "used_stk_limit": 0,
-      "filled_up_limit": 0,
-      "filled_down_limit": 0,
-      "warn": "limit_list_d missing ts_code or empty"
+      "used_stk_limit": 1,
+      "filled_up_limit": 89,
+      "filled_down_limit": 89,
+      "warn": ""
     },
     "limit_stage": {
-      "source": "",
-      "limit_list_rows": 0,
-      "limit_step_rows": 0,
-      "rows": 0,
-      "limit_times_nonnull": 0,
-      "missing_reason": "limit_list_d_empty_or_missing_ts_code"
+      "source": "limit_list_d.limit_times",
+      "limit_list_rows": 83,
+      "limit_step_rows": 18,
+      "rows": 83,
+      "limit_times_nonnull": 83,
+      "missing_reason": ""
     },
     "hot_board_tags": {
       "hot_board_topn": 10,
-      "hot_boards": 0,
-      "tagged": 0
+      "hot_boards": 10,
+      "tagged": 83
     }
   },
   "limit_step": {
     "ok": true,
     "api_name": "limit_step",
-    "rows": 0,
+    "rows": 18,
     "columns": [
       "trade_date",
       "ts_code",
@@ -183,7 +183,7 @@
   "auction": {
     "enabled": true,
     "ok": true,
-    "rows": 0,
+    "rows": 7927,
     "columns": [
       "ts_code",
       "trade_date",
@@ -192,7 +192,7 @@
       "amount"
     ],
     "error": "",
-    "feature_rows": 0
+    "feature_rows": 7927
   },
   "minute": {
     "enabled": true,
@@ -205,17 +205,17 @@
     },
     "ok": true,
     "freq": "1min",
-    "wp_pre_candidates": 0,
-    "minute_end": "",
-    "symbols_requested": 0,
-    "symbols_success": 0,
+    "wp_pre_candidates": 40,
+    "minute_end": "2026-09-01 15:00:00",
+    "symbols_requested": 80,
+    "symbols_success": 80,
     "symbols_failed": 0,
     "errors": [],
-    "skip_reason": "REALTIME_MINUTE_ONLY enabled; skip stk_mins before 09:30 Beijing time"
+    "fallback_symbol_query_count": 80
   },
   "intraday_features": {
     "ok": true,
-    "rows": 0,
+    "rows": 80,
     "columns": [
       "ts_code",
       "trade_date",
@@ -247,7 +247,7 @@
   },
   "realtime_snapshot": {
     "ok": true,
-    "rows": 0,
+    "rows": 80,
     "columns": [
       "ts_code",
       "trade_date",
