@@ -463,8 +463,8 @@ def build_jobs(pro, trade_date: str) -> List[FetchJob]:
             fn=pro.daily,
             kwargs={"trade_date": trade_date, "fields": daily_fields},
             columns=_fields_to_columns(daily_fields),
-            allow_empty=True,
-            required=False,
+            allow_empty=False,
+            required=True,
             note="日线行情（OHLCV+amount）",
         )
     )
@@ -477,8 +477,8 @@ def build_jobs(pro, trade_date: str) -> List[FetchJob]:
             fn=pro.stk_limit,
             kwargs={"trade_date": trade_date, "fields": stk_limit_fields},
             columns=_fields_to_columns(stk_limit_fields),
-            allow_empty=True,
-            required=False,
+            allow_empty=False,
+            required=True,
             note="涨跌停价（限制价格）",
         )
     )
@@ -491,8 +491,8 @@ def build_jobs(pro, trade_date: str) -> List[FetchJob]:
             fn=pro.daily_basic,
             kwargs={"trade_date": trade_date, "fields": daily_basic_fields},
             columns=_fields_to_columns(daily_basic_fields),
-            allow_empty=True,
-            required=False,
+            allow_empty=False,
+            required=True,
             note="每日指标（换手/市值/量比）",
         )
     )
@@ -1885,7 +1885,6 @@ def main():
     # 先抓取所有表（不急着对 limit_list_d 做最终过滤）
     for job in jobs:
         out_csv = base_raw / f"{job.key}.csv"
-        out_latest = base_latest / f"{job.key}.csv"
 
         job_columns[job.key] = job.columns
 
@@ -1905,7 +1904,7 @@ def main():
                 job.fn,
                 retry=retry_cfg,
                 allow_empty=job.allow_empty,
-                empty_ok_after_retry=True,
+                empty_ok_after_retry=not job.required,
                 **job.kwargs,
             )
 
@@ -1913,9 +1912,8 @@ def main():
 
             dfs[job.key] = df
 
-            # 先按原始抓取结果落盘（limit_list_d 之后会被“强制推导版”覆盖一次）
+            # 先只写日期归档。所有必需表通过后，才统一更新 latest。
             save_df(df, out_csv, columns=job.columns)
-            save_df(df, out_latest, columns=job.columns)
 
             job_record["status"] = "ok" if (df is not None and not df.empty) else "ok_empty"
             job_record["rows"] = int(len(df)) if df is not None else 0
@@ -1931,7 +1929,6 @@ def main():
 
             try:
                 save_df(pd.DataFrame(), out_csv, columns=job.columns)
-                save_df(pd.DataFrame(), out_latest, columns=job.columns)
             except Exception:
                 pass
 
@@ -1939,6 +1936,20 @@ def main():
                 any_required_failed = True
 
         meta["jobs"].append(job_record)
+
+    if any_required_failed:
+        safe_json_dump(meta, base_raw / "_meta.json")
+        raise RuntimeError(
+            "Some required jobs failed. The dated failure metadata was saved and data/latest was not modified."
+        )
+
+    # 只有所有必需表都非空成功后，才发布这一批抓取结果到 latest。
+    for job in jobs:
+        save_df(
+            dfs.get(job.key, pd.DataFrame()),
+            base_latest / f"{job.key}.csv",
+            columns=job.columns,
+        )
 
     # =========================
     # 系统级强制约束（根治点）：
@@ -2047,9 +2058,6 @@ def main():
         safe_json_dump(meta, base_latest / "_meta.json")
         print(f"[INTRADAY-UPGRADE-FAILED] err={repr(e)}")
         print(traceback.format_exc())
-
-    if any_required_failed:
-        raise RuntimeError("Some required jobs failed. Check data/raw/.../_meta.json for details.")
 
     print("[DONE] snapshots saved.")
     print(json.dumps(meta, ensure_ascii=False, indent=2))

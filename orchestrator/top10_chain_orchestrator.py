@@ -498,12 +498,44 @@ def chain_outputs_status(trade_date: str) -> Tuple[bool, str, Optional[str]]:
     return True, "all chain outputs are already published", report
 
 
-def not_before_reached(value: str) -> Tuple[bool, str]:
+def _parse_hhmm(value: str, label: str) -> Tuple[int, int]:
     if not re.fullmatch(r"\d{2}:\d{2}", value):
-        raise ChainError(f"invalid not-before time={value!r}; expect HH:MM")
+        raise ChainError(f"invalid {label} time={value!r}; expect HH:MM")
     hour, minute = (int(part) for part in value.split(":"))
     if not (0 <= hour <= 23 and 0 <= minute <= 59):
-        raise ChainError(f"invalid not-before time={value!r}; expect HH:MM")
+        raise ChainError(f"invalid {label} time={value!r}; expect HH:MM")
+    return hour, minute
+
+
+def resolve_trade_date(
+    explicit_trade_date: str = "",
+    schedule_slot: str = "",
+    current_bj: Optional[dt.datetime] = None,
+) -> Tuple[str, str]:
+    explicit = explicit_trade_date.strip()
+    if explicit:
+        return explicit, "explicit"
+
+    now_bj = current_bj or dt.datetime.now(TZ)
+    if now_bj.tzinfo is None:
+        now_bj = now_bj.replace(tzinfo=TZ)
+    else:
+        now_bj = now_bj.astimezone(TZ)
+
+    if schedule_slot:
+        hour, minute = _parse_hhmm(schedule_slot, "schedule-slot")
+        scheduled = now_bj.replace(hour=hour, minute=minute, second=0, microsecond=0)
+        if now_bj < scheduled:
+            scheduled -= dt.timedelta(days=1)
+        while scheduled.weekday() >= 5:
+            scheduled -= dt.timedelta(days=1)
+        return scheduled.strftime("%Y%m%d"), f"schedule_slot_{schedule_slot}"
+
+    return now_bj.strftime("%Y%m%d"), "beijing_wall_clock"
+
+
+def not_before_reached(value: str) -> Tuple[bool, str]:
+    hour, minute = _parse_hhmm(value, "not-before")
     now_bj = dt.datetime.now(TZ)
     target = now_bj.replace(hour=hour, minute=minute, second=0, microsecond=0)
     return now_bj >= target, now_bj.strftime("%Y-%m-%d %H:%M:%S %Z")
@@ -523,18 +555,30 @@ def main() -> int:
     ap.add_argument("--trade-date", default="")
     ap.add_argument("--skip-calendar", action="store_true")
     ap.add_argument("--not-before", default="", help="Skip before this Beijing time (HH:MM)")
+    ap.add_argument(
+        "--schedule-slot",
+        default="",
+        help="Bind an implicit trade date to the latest Beijing schedule slot (HH:MM)",
+    )
     args = ap.parse_args()
 
     token = os.getenv("ORCHESTRATOR_TOKEN", "").strip()
     if not token:
         raise ChainError("missing ORCHESTRATOR_TOKEN secret")
     tushare_token = os.getenv("TUSHARE_TOKEN", "").strip()
-    trade_date = args.trade_date.strip() or dt.datetime.now(TZ).strftime("%Y%m%d")
+    trade_date, trade_date_source = resolve_trade_date(args.trade_date, args.schedule_slot)
     if not re.fullmatch(r"\d{8}", trade_date):
         raise ChainError(f"invalid trade_date={trade_date!r}")
 
     started = now_utc()
-    summary = ["# A-share Top10 Chain Orchestrator", "", f"- trade_date: `{trade_date}`", f"- started_at_utc: `{iso(started)}`"]
+    summary = [
+        "# A-share Top10 Chain Orchestrator",
+        "",
+        f"- trade_date: `{trade_date}`",
+        f"- trade_date_source: `{trade_date_source}`",
+        f"- started_at_utc: `{iso(started)}`",
+    ]
+    log(f"[date] trade_date={trade_date} source={trade_date_source}")
 
     if args.not_before:
         reached, now_bj = not_before_reached(args.not_before)

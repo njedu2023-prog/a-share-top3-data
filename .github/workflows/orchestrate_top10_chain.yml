@@ -80,4 +80,7 @@ jobs:
           if [ "${{ github.event_name }}" = "workflow_run" ]; then
             args+=(--not-before "19:10")
           fi
+          if [ "${{ github.event_name }}" = "schedule" ]; then
+            args+=(--schedule-slot "19:10")
+          fi
           python orchestrator/top10_chain_orchestrator.py "${args[@]}"
