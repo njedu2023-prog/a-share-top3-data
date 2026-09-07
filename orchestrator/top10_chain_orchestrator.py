@@ -41,6 +41,8 @@ V12_WF = "run_auction_v3.yml"
 
 A_TOP10_HOME = "https://njedu2023-prog.github.io/a-top10/"
 DECISION_HOME = "https://njedu2023-prog.github.io/top10-decision/decision.html"
+DECISION_REPORT_INDEX = "https://njedu2023-prog.github.io/top10-decision/outputs/decision/report_index.json"
+DECISION_ACTION_PLAN = "https://njedu2023-prog.github.io/top10-decision/outputs/decision/action_plan_latest.json"
 AUCTION_HOME = "https://njedu2023-prog.github.io/top10-decision/docs/reports/auction_v3_latest.html"
 PREMIUM_HOME = "https://njedu2023-prog.github.io/top10-decision/docs/reports/premium_latest.html"
 CORE_DATA_FILES = ("daily.csv", "daily_basic.csv", "stk_limit.csv", "limit_list_d.csv")
@@ -430,29 +432,103 @@ def wait_followup_workflow(
     label: str,
     timeout_s: int = 3000,
 ) -> Dict[str, Any]:
-    """Wait for one required workflow_run follow-up after Decision.
+    """Wait for the newest matching workflow_run follow-up after Decision.
 
     Premium and V12 share a non-cancelling writer lock, so either one can run
-    first. Both must reach a successful terminal state before final Pages can
-    be accepted.
+    first. A transient terminal conclusion is deliberately allowed to bubble
+    up so the pair coordinator can wait for the surviving writer before doing
+    at most one recovery dispatch.
     """
     deadline = time.time() + timeout_s
-    ignored_run_ids = set()
     while time.time() < deadline:
-        for run in workflow_runs(DECISION_REPO, workflow, token, 20):
-            run_id = int(run["id"])
-            if parse_time(run["created_at"]) < since or run_id in ignored_run_ids:
-                continue
-            try:
-                return wait_run(DECISION_REPO, workflow, token, run, label, timeout_s)
-            except WorkflowRunError as exc:
-                if exc.conclusion not in RETRYABLE_CONCLUSIONS:
-                    raise
-                ignored_run_ids.add(run_id)
-                log(f"[{label}] ignore superseded run conclusion={exc.conclusion} {run.get('html_url')}")
-                break
+        candidates = [
+            run
+            for run in workflow_runs(DECISION_REPO, workflow, token, 20)
+            if run.get("event") == "workflow_run"
+            and parse_time(run["created_at"]) >= since
+        ]
+        if candidates:
+            candidates.sort(key=lambda run: parse_time(run["created_at"]), reverse=True)
+            remaining = max(1, int(deadline - time.time()))
+            return wait_run(
+                DECISION_REPO,
+                workflow,
+                token,
+                candidates[0],
+                label,
+                remaining,
+            )
         time.sleep(15)
     raise ChainError(f"{label}: no run observed after decision")
+
+
+def followup_window_start(decision_run: Dict[str, Any], skew_s: int = 30) -> dt.datetime:
+    """Return a narrow lower bound around the Decision completion event."""
+    timestamp = str(decision_run.get("updated_at") or decision_run.get("created_at") or "")
+    if not timestamp:
+        raise ChainError("decision run is missing updated_at/created_at")
+    return parse_time(timestamp) - dt.timedelta(seconds=skew_s)
+
+
+def wait_decision_followups(
+    token: str,
+    since: dt.datetime,
+    trade_date: str,
+    timeout_s: int = 3000,
+) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+    """Wait for Premium and V12, recovering at most one displaced sibling.
+
+    GitHub's default concurrency queue retains only one pending run. Waiting
+    for both initial follow-ups before recovering the transient loser ensures
+    the surviving shared writer has completed and released the lock first.
+    """
+    specs = {
+        "decision_v12": (V12_WF, "decision-v12", {"signal_date": trade_date}),
+        "premium": (PREMIUM_WF, "premium", {"cmd": "predict"}),
+    }
+    completed: Dict[str, Dict[str, Any]] = {}
+    displaced: Dict[str, WorkflowRunError] = {}
+
+    # Keep V12 first for the observed fan-out order, but collect either loser
+    # before dispatching anything so the opposite ordering is safe as well.
+    for key in ("decision_v12", "premium"):
+        workflow, label, _ = specs[key]
+        try:
+            completed[key] = wait_followup_workflow(
+                token, since, workflow, label, timeout_s
+            )
+        except WorkflowRunError as exc:
+            if exc.conclusion not in RETRYABLE_CONCLUSIONS:
+                raise
+            displaced[key] = exc
+            log(
+                f"[{label}] displaced follow-up conclusion={exc.conclusion}; "
+                "defer recovery until sibling completes"
+            )
+
+    if len(displaced) > 1:
+        labels = ", ".join(sorted(displaced))
+        raise ChainError(
+            f"multiple Decision follow-ups ended transiently ({labels}); "
+            "refuse ambiguous recovery"
+        )
+
+    for key in displaced:
+        workflow, label, inputs = specs[key]
+        log(f"[{label}] dispatch at most one recovery after sibling success")
+        recovered, _ = execute_workflow(
+            DECISION_REPO,
+            workflow,
+            token,
+            inputs,
+            label,
+            timeout_s,
+            active_since=since,
+            retry_count=0,
+        )
+        completed[key] = recovered
+
+    return completed["premium"], completed["decision_v12"]
 
 
 def decision_report_for_signal(trade_date: str) -> Optional[str]:
@@ -469,6 +545,41 @@ def decision_report_for_signal(trade_date: str) -> Optional[str]:
     return None
 
 
+def decision_dashboard_data_status(trade_date: str) -> Tuple[bool, str]:
+    """Validate the published JSON contract consumed by the dynamic dashboard."""
+    try:
+        report_index = json.loads(get_text(DECISION_REPORT_INDEX))
+        action_plan = json.loads(get_text(DECISION_ACTION_PLAN))
+    except Exception as exc:
+        return False, f"dashboard data unavailable: {type(exc).__name__}: {exc}"
+
+    signal_date = str(action_plan.get("signal_date") or "")
+    exec_date = str(action_plan.get("exec_date") or "")
+    report_date = str(report_index.get("latest_report_date") or "")
+    if signal_date != trade_date:
+        return False, f"action plan signal_date={signal_date or '-'}; expected {trade_date}"
+    if not re.fullmatch(r"\d{8}", exec_date):
+        return False, f"action plan exec_date is invalid: {exec_date or '-'}"
+    if report_date != exec_date:
+        return False, f"report index latest_report_date={report_date or '-'}; expected exec_date={exec_date}"
+    return True, f"dashboard data current for signal_date={signal_date} exec_date={exec_date}"
+
+
+def wait_decision_dashboard_data(trade_date: str, timeout_s: int = 900) -> None:
+    deadline = time.time() + timeout_s
+    last = ""
+    while time.time() < deadline:
+        ok, detail = decision_dashboard_data_status(trade_date)
+        if ok:
+            log(f"[publish] decision dashboard data: OK {detail}")
+            return
+        if detail != last:
+            log(f"[publish] waiting for decision dashboard data: {detail}")
+            last = detail
+        time.sleep(20)
+    raise ChainError(f"decision dashboard data publication timeout: {last}")
+
+
 def chain_outputs_status(trade_date: str) -> Tuple[bool, str, Optional[str]]:
     data_ok, detail = data_outputs_status(trade_date)
     if not data_ok:
@@ -478,6 +589,8 @@ def chain_outputs_status(trade_date: str) -> Tuple[bool, str, Optional[str]]:
         page_url("a-top10", f"outputs/predict_top10_{trade_date}.md"),
         raw_url(TOP10_REPO, f"outputs/decisio/pred_decisio_{trade_date}.csv"),
         DECISION_HOME,
+        DECISION_REPORT_INDEX,
+        DECISION_ACTION_PLAN,
         page_url("top10-decision", f"docs/reports/auction_v3_{trade_date}.html"),
         page_url("top10-decision", f"docs/reports/premium_{trade_date}.html"),
     )
@@ -488,6 +601,9 @@ def chain_outputs_status(trade_date: str) -> Tuple[bool, str, Optional[str]]:
     report = decision_report_for_signal(trade_date)
     if not report:
         return False, f"decision report is not published for signal_date={trade_date}", None
+    dashboard_ok, dashboard_detail = decision_dashboard_data_status(trade_date)
+    if not dashboard_ok:
+        return False, dashboard_detail, report
     try:
         if trade_date not in get_text(AUCTION_HOME):
             return False, f"auction latest does not contain signal_date={trade_date}", report
@@ -662,19 +778,18 @@ def main() -> int:
         7200,
     )
     summary.append(f"- decision: `success` [#{decision_done['run_number']}]({decision_done['html_url']})")
-    premium_done = wait_followup_workflow(
-        token, decision_start, PREMIUM_WF, "premium", 3000
-    )
-    summary.append(f"- premium: `success` [#{premium_done['run_number']}]({premium_done['html_url']})")
-    v12_done = wait_followup_workflow(
-        token, decision_start, V12_WF, "decision-v12", 3000
+    followup_since = followup_window_start(decision_done)
+    premium_done, v12_done = wait_decision_followups(
+        token, followup_since, trade_date, 3000
     )
     summary.append(f"- decision_v12: `success` [#{v12_done['run_number']}]({v12_done['html_url']})")
+    summary.append(f"- premium: `success` [#{premium_done['run_number']}]({premium_done['html_url']})")
     decision_pages = wait_pages(DECISION_REPO, token, decision_start, "top10-decision pages", 1200)
     summary.append(
         f"- decision_pages: `success` [#{decision_pages['run_number']}]({decision_pages['html_url']})"
     )
     wait_url(DECISION_HOME, "decision dashboard", 900)
+    wait_decision_dashboard_data(trade_date, 900)
     report = decision_report_for_signal(trade_date)
     if not report:
         raise ChainError(f"cannot find decision report for signal_date={trade_date}")
