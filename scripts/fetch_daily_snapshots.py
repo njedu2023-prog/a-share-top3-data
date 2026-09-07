@@ -1060,6 +1060,56 @@ def build_intraday_universe(day_dir: Path) -> List[str]:
     return out
 
 
+def select_intraday_symbols(
+    candidate_symbols: List[str],
+    required_symbols: List[str],
+    max_symbols: int,
+) -> Tuple[List[str], Dict[str, Any]]:
+    """Apply the minute-fetch cap without starving the close limit-up pool.
+
+    ``wp_pre_candidates`` intentionally excludes current limit-up stocks, so a
+    large WP list can otherwise consume the entire configured cap before any
+    rank-producing ``limit_list_d`` symbol is reached.  Preserve every symbol
+    that the legacy cap selected, then prepend any missing required symbols.
+    This fixes the starvation bug without reducing the existing WP coverage.
+    """
+
+    required: List[str] = []
+    required_seen = set()
+    for value in required_symbols:
+        code = _norm_ts_code(value)
+        if code and code not in required_seen:
+            required_seen.add(code)
+            required.append(code)
+
+    candidates: List[str] = []
+    candidate_seen = set()
+    for value in candidate_symbols:
+        code = _norm_ts_code(value)
+        if code and code not in candidate_seen:
+            candidate_seen.add(code)
+            candidates.append(code)
+
+    configured_cap = max(0, int(max_symbols))
+    legacy_selected = candidates[:configured_cap] if configured_cap > 0 else candidates
+    legacy_selected_set = set(legacy_selected)
+    preserved_nonrequired = [code for code in legacy_selected if code not in required_seen]
+    selected = required + preserved_nonrequired
+    required_already_in_legacy = sum(code in legacy_selected_set for code in required)
+    info: Dict[str, Any] = {
+        "policy": "preserve_legacy_selection_plus_required_limit_list",
+        "configured_cap": configured_cap,
+        "legacy_selected_count": len(legacy_selected),
+        "required_count": len(required),
+        "required_selected": len(required),
+        "required_already_in_legacy": required_already_in_legacy,
+        "required_added_beyond_cap": len(required) - required_already_in_legacy,
+        "preserved_nonrequired_count": len(preserved_nonrequired),
+        "selected_count": len(selected),
+    }
+    return selected, info
+
+
 def build_wp_pre_candidates(
     trade_date: str,
     base_raw: Path,
@@ -1683,8 +1733,8 @@ def run_intraday_upgrade(
         symbols = priority_symbols
         save_df(pd.DataFrame(), base_raw / "realtime_quote.csv", columns=_realtime_quote_columns())
         save_df(pd.DataFrame(), base_latest / "realtime_quote.csv", columns=_realtime_quote_columns())
-    if max_symbols > 0:
-        symbols = symbols[:max_symbols]
+    required_symbols = _read_symbol_priority(base_raw / "limit_list_d.csv")
+    symbols, selection_info = select_intraday_symbols(symbols, required_symbols, max_symbols)
     limit_map = _limit_price_map(dfs.get("stk_limit", pd.DataFrame()))
     now = bj_now()
     is_today = trade_date == now.strftime("%Y%m%d")
@@ -1702,6 +1752,7 @@ def run_intraday_upgrade(
         "ok": False,
         "freq": minute_freq,
         "wp_pre_candidates": int(len(wp_symbols)),
+        "selection": selection_info,
         "minute_end": minute_end_dt.strftime("%Y-%m-%d %H:%M:%S") if minute_end_dt else "",
         "symbols_requested": int(len(symbols)) if enable_minute else 0,
         "symbols_success": 0,
@@ -1799,6 +1850,24 @@ def run_intraday_upgrade(
         for ts_code, df in minute_frames.items():
             save_df(df, raw_minute_dir / f"{ts_code}.csv", columns=list(df.columns) or _minute_columns())
             save_df(df, latest_minute_dir / f"{ts_code}.csv", columns=list(df.columns) or _minute_columns())
+        required_set = set(required_symbols)
+        required_success = sum(
+            code in minute_frames and minute_frames[code] is not None and not minute_frames[code].empty
+            for code in required_set
+        )
+        meta["minute"]["required_symbols_success"] = int(required_success)
+        meta["minute"]["required_symbols_failed"] = int(max(0, len(required_set) - required_success))
+        meta["minute"]["required_failed_codes"] = [
+            code
+            for code in required_symbols
+            if code not in minute_frames or minute_frames[code] is None or minute_frames[code].empty
+        ][:30]
+        meta["minute"]["required_coverage_ratio"] = (
+            float(required_success / len(required_set)) if required_set else 1.0
+        )
+        meta["minute"]["coverage_status"] = (
+            "complete" if required_success == len(required_set) else "partial"
+        )
         meta["minute"]["errors"] = meta["minute"]["errors"][:30]
         meta["minute"]["ok"] = True
     else:

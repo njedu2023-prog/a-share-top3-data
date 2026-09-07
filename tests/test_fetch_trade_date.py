@@ -9,6 +9,7 @@ from scripts.fetch_daily_snapshots import (
     default_trade_date,
     main as fetch_main,
     resolve_trade_date,
+    select_intraday_symbols,
 )
 
 
@@ -118,3 +119,67 @@ def test_required_failure_does_not_replace_latest(tmp_path, monkeypatch):
     after = {path.name: path.read_bytes() for path in latest.iterdir()}
     assert after == before
     assert (tmp_path / "data" / "raw" / "2026" / "20260901" / "_meta.json").exists()
+
+
+def test_intraday_selection_guarantees_limit_pool_beyond_configured_cap():
+    required = [f"{600000 + i:06d}.SH" for i in range(93)]
+    wp = [f"{300000 + i:06d}.SZ" for i in range(111)]
+
+    selected, info = select_intraday_symbols(wp + required, required, max_symbols=80)
+
+    assert selected == required + wp[:80]
+    assert info == {
+        "policy": "preserve_legacy_selection_plus_required_limit_list",
+        "configured_cap": 80,
+        "legacy_selected_count": 80,
+        "required_count": 93,
+        "required_selected": 93,
+        "required_already_in_legacy": 0,
+        "required_added_beyond_cap": 93,
+        "preserved_nonrequired_count": 80,
+        "selected_count": 173,
+    }
+
+
+def test_intraday_selection_fills_remaining_capacity_with_stable_optional_order():
+    required = ["600001.SH", "600002.SH", "600003.SH"]
+    candidates = [
+        "300001.SZ",
+        "600002.SH",
+        "300002.SZ",
+        "300001.SZ",
+        "300003.SZ",
+    ]
+
+    selected, info = select_intraday_symbols(candidates, required, max_symbols=5)
+
+    assert selected == required + ["300001.SZ", "300002.SZ", "300003.SZ"]
+    assert info["required_selected"] == 3
+    assert info["required_already_in_legacy"] == 1
+    assert info["required_added_beyond_cap"] == 2
+    assert info["preserved_nonrequired_count"] == 3
+    assert info["selected_count"] == 6
+
+
+def test_intraday_selection_preserves_legacy_cap_when_required_pool_is_empty():
+    candidates = ["300001.SZ", "300002.SZ", "300001.SZ", "300003.SZ"]
+
+    selected, info = select_intraday_symbols(candidates, [], max_symbols=2)
+
+    assert selected == ["300001.SZ", "300002.SZ"]
+    assert info["required_count"] == 0
+    assert info["legacy_selected_count"] == 2
+    assert info["preserved_nonrequired_count"] == 2
+    assert info["selected_count"] == 2
+
+
+def test_intraday_selection_keeps_unlimited_semantics_for_zero_cap():
+    required = ["600001.SH", "600002.SH"]
+    candidates = ["300001.SZ", "600001.SH", "300002.SZ"]
+
+    selected, info = select_intraday_symbols(candidates, required, max_symbols=0)
+
+    assert selected == required + ["300001.SZ", "300002.SZ"]
+    assert info["legacy_selected_count"] == 3
+    assert info["preserved_nonrequired_count"] == 2
+    assert info["selected_count"] == 4
