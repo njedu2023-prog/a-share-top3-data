@@ -1,7 +1,7 @@
 {
-  "requested_trade_date": null,
+  "requested_trade_date": "20260907",
   "resolved_trade_date": "20260907",
-  "generated_at_bj": "2026-09-07 22:33:20",
+  "generated_at_bj": "2026-09-07 23:04:24",
   "jobs": [
     {
       "key": "limit_list_d",
@@ -206,16 +206,32 @@
     "ok": true,
     "freq": "1min",
     "wp_pre_candidates": 111,
+    "selection": {
+      "policy": "preserve_legacy_selection_plus_required_limit_list",
+      "configured_cap": 80,
+      "legacy_selected_count": 80,
+      "required_count": 93,
+      "required_selected": 93,
+      "required_already_in_legacy": 0,
+      "required_added_beyond_cap": 93,
+      "preserved_nonrequired_count": 80,
+      "selected_count": 173
+    },
     "minute_end": "2026-09-07 15:00:00",
-    "symbols_requested": 80,
-    "symbols_success": 80,
+    "symbols_requested": 173,
+    "symbols_success": 173,
     "symbols_failed": 0,
     "errors": [],
-    "fallback_symbol_query_count": 80
+    "fallback_symbol_query_count": 173,
+    "required_symbols_success": 93,
+    "required_symbols_failed": 0,
+    "required_failed_codes": [],
+    "required_coverage_ratio": 1.0,
+    "coverage_status": "complete"
   },
   "intraday_features": {
     "ok": true,
-    "rows": 80,
+    "rows": 173,
     "columns": [
       "ts_code",
       "trade_date",
@@ -247,7 +263,7 @@
   },
   "realtime_snapshot": {
     "ok": true,
-    "rows": 80,
+    "rows": 173,
     "columns": [
       "ts_code",
       "trade_date",
