@@ -1,7 +1,7 @@
 {
   "requested_trade_date": null,
   "resolved_trade_date": "20260930",
-  "generated_at_bj": "2026-10-01 23:47:48",
+  "generated_at_bj": "2026-10-02 00:39:00",
   "jobs": [
     {
       "key": "limit_list_d",
@@ -222,7 +222,7 @@
     "symbols_success": 0,
     "symbols_failed": 0,
     "errors": [],
-    "skip_reason": "REALTIME_MINUTE_ONLY enabled; trade_date 20260930 is not today 20261001"
+    "skip_reason": "REALTIME_MINUTE_ONLY enabled; trade_date 20260930 is not today 20261002"
   },
   "intraday_features": {
     "ok": true,
