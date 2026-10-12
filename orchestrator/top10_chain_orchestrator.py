@@ -10,6 +10,7 @@ moves to the next repository.
 from __future__ import annotations
 
 import argparse
+import csv
 import datetime as dt
 import io
 import json
@@ -89,16 +90,25 @@ def request(url: str, *, method: str = "GET", token: str = "", payload: Optional
     if payload is not None:
         headers["Content-Type"] = "application/json"
     req = urllib.request.Request(url, data=data, method=method, headers=headers)
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        body = resp.read()
-        if raw:
-            return body
-        if not body:
-            return {}
-        ctype = resp.headers.get("content-type", "")
-        if "json" in ctype or url.startswith(API):
-            return json.loads(body.decode("utf-8"))
-        return body.decode("utf-8", errors="replace")
+    # Retry safe reads only; a dispatch POST must never be replayed blindly.
+    for attempt in range(4):
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                body = resp.read()
+                if raw:
+                    return body
+                if not body:
+                    return {}
+                ctype = resp.headers.get("content-type", "")
+                if "json" in ctype or url.startswith(API):
+                    return json.loads(body.decode("utf-8"))
+                return body.decode("utf-8", errors="replace")
+        except urllib.error.HTTPError as exc:
+            if method != "GET" or exc.code not in {429, 500, 502, 503, 504} or attempt == 3:
+                raise
+            log(f"[http] transient GET status={exc.code}; retry {attempt + 1}/3")
+            time.sleep(2 ** (attempt + 1))
+
 
 
 def gh(path: str, token: str) -> Any:
@@ -296,6 +306,27 @@ def trigger_or_attach(
             return run
         time.sleep(6)
     raise ChainError(f"{label}: dispatch succeeded but no run found")
+
+
+def completed_daily_stage(repo: str, workflow: str, token: str, trade_date: str) -> Optional[Dict[str, Any]]:
+    """Reuse an after-close success only when its exact-D published output exists."""
+    cutoff = dt.datetime.strptime(trade_date, "%Y%m%d").replace(hour=15, tzinfo=TZ).astimezone(dt.timezone.utc)
+    run = recent_success(repo, workflow, token, cutoff)
+    if not run:
+        return None
+    if workflow == TOP10_WF:
+        text = get_text(raw_url(repo, f"outputs/decisio/pred_decisio_{trade_date}.csv"))
+        rows = list(csv.DictReader(io.StringIO(text.lstrip("\ufeff"))))
+        valid = bool(rows) and all(row.get("trade_date") == trade_date and str(row.get("run_id")) == str(run["id"]) for row in rows)
+    elif workflow == DECISION_WF:
+        valid, _ = decision_dashboard_data_status(trade_date)
+        valid = valid and bool(decision_report_for_signal(trade_date))
+    else:
+        raise ChainError(f"unsupported daily reuse workflow: {workflow}")
+    if not valid:
+        raise ChainError(f"successful {workflow} has unverified exact-D output; refusing duplicate dispatch")
+    log(f"[dedupe] reuse {workflow} success {run['html_url']}")
+    return run
 
 
 def failed_log_excerpt(repo: str, run_id: int, token: str) -> str:
@@ -751,14 +782,14 @@ def main() -> int:
         summary.append(f"- data: `success` [#{data_done['run_number']}]({data_done['html_url']})")
     wait_data_outputs(trade_date, 900)
 
-    top10_done, top10_start = execute_workflow(
-        TOP10_REPO,
-        TOP10_WF,
-        token,
-        {"trade_date": trade_date},
-        "a-top10",
-        3600,
-    )
+    top10_done = completed_daily_stage(TOP10_REPO, TOP10_WF, token, trade_date)
+    if top10_done:
+        top10_start = parse_time(top10_done["created_at"])
+    else:
+        top10_done, top10_start = execute_workflow(
+            TOP10_REPO, TOP10_WF, token, {"trade_date": trade_date}, "a-top10", 3600,
+            active_since=day_start_utc,
+        )
     summary.append(f"- a-top10: `success` [#{top10_done['run_number']}]({top10_done['html_url']})")
     top10_pages = wait_pages(TOP10_REPO, token, top10_start, "a-top10 pages", 900)
     summary.append(
@@ -769,14 +800,14 @@ def main() -> int:
     wait_url(raw_url(TOP10_REPO, f"outputs/decisio/pred_decisio_{trade_date}.csv"), "a-top10 pred csv", 900)
     summary.append(f"- a-top10_report: {A_TOP10_HOME}")
 
-    decision_done, decision_start = execute_workflow(
-        DECISION_REPO,
-        DECISION_WF,
-        token,
-        {"trade_date": trade_date},
-        "decision",
-        7200,
-    )
+    decision_done = completed_daily_stage(DECISION_REPO, DECISION_WF, token, trade_date)
+    if decision_done:
+        decision_start = parse_time(decision_done["created_at"])
+    else:
+        decision_done, decision_start = execute_workflow(
+            DECISION_REPO, DECISION_WF, token, {"trade_date": trade_date}, "decision", 7200,
+            active_since=day_start_utc,
+        )
     summary.append(f"- decision: `success` [#{decision_done['run_number']}]({decision_done['html_url']})")
     followup_since = followup_window_start(decision_done)
     premium_done, v12_done = wait_decision_followups(
