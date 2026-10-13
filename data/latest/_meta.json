@@ -1,7 +1,7 @@
 {
-  "requested_trade_date": "20261013",
+  "requested_trade_date": null,
   "resolved_trade_date": "20261013",
-  "generated_at_bj": "2026-10-13 19:20:38",
+  "generated_at_bj": "2026-10-14 00:33:31",
   "jobs": [
     {
       "key": "limit_list_d",
@@ -217,17 +217,12 @@
       "preserved_nonrequired_count": 38,
       "selected_count": 105
     },
-    "minute_end": "2026-10-13 15:00:00",
+    "minute_end": "",
     "symbols_requested": 105,
-    "symbols_success": 105,
+    "symbols_success": 0,
     "symbols_failed": 0,
     "errors": [],
-    "fallback_symbol_query_count": 105,
-    "required_symbols_success": 67,
-    "required_symbols_failed": 0,
-    "required_failed_codes": [],
-    "required_coverage_ratio": 1.0,
-    "coverage_status": "complete"
+    "skip_reason": "REALTIME_MINUTE_ONLY enabled; trade_date 20261013 is not today 20261014"
   },
   "intraday_features": {
     "ok": true,
@@ -263,7 +258,7 @@
   },
   "realtime_snapshot": {
     "ok": true,
-    "rows": 105,
+    "rows": 0,
     "columns": [
       "ts_code",
       "trade_date",
