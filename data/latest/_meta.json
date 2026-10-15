@@ -1,7 +1,7 @@
 {
-  "requested_trade_date": "20261015",
+  "requested_trade_date": null,
   "resolved_trade_date": "20261015",
-  "generated_at_bj": "2026-10-15 19:18:37",
+  "generated_at_bj": "2026-10-15 21:45:44",
   "jobs": [
     {
       "key": "limit_list_d",
