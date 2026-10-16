@@ -1,7 +1,7 @@
 {
   "requested_trade_date": null,
   "resolved_trade_date": "20261016",
-  "generated_at_bj": "2026-10-16 21:36:00",
+  "generated_at_bj": "2026-10-16 22:07:38",
   "jobs": [
     {
       "key": "limit_list_d",
@@ -104,8 +104,8 @@
       "kwargs": {
         "trade_date": "20261016"
       },
-      "status": "ok_empty",
-      "rows": 0,
+      "status": "ok",
+      "rows": 61,
       "error": null
     },
     {
@@ -116,8 +116,8 @@
       "kwargs": {
         "trade_date": "20261016"
       },
-      "status": "ok_empty",
-      "rows": 0,
+      "status": "ok",
+      "rows": 1,
       "error": null
     }
   ],
@@ -158,7 +158,7 @@
     "limit_stage": {
       "source": "limit_list_d.limit_times",
       "limit_list_rows": 63,
-      "limit_step_rows": 0,
+      "limit_step_rows": 7,
       "rows": 63,
       "limit_times_nonnull": 61,
       "missing_reason": ""
@@ -172,14 +172,18 @@
   "limit_step": {
     "ok": true,
     "api_name": "limit_step",
-    "rows": 0,
-    "columns": [],
+    "rows": 7,
+    "columns": [
+      "trade_date",
+      "ts_code",
+      "name"
+    ],
     "error": ""
   },
   "auction": {
     "enabled": true,
     "ok": true,
-    "rows": 77,
+    "rows": 6095,
     "columns": [
       "ts_code",
       "trade_date",
@@ -188,7 +192,7 @@
       "amount"
     ],
     "error": "",
-    "feature_rows": 77
+    "feature_rows": 6095
   },
   "minute": {
     "enabled": true,
@@ -215,143 +219,15 @@
     },
     "minute_end": "2026-10-16 15:00:00",
     "symbols_requested": 106,
-    "symbols_success": 73,
-    "symbols_failed": 33,
-    "errors": [
-      {
-        "ts_code": "000099.SZ",
-        "error": "ReadTimeout(ReadTimeoutError(\"HTTPConnectionPool(host='api.waditu.com', port=80): Read timed out. (read timeout=30)\"))"
-      },
-      {
-        "ts_code": "000420.SZ",
-        "error": "ReadTimeout(ReadTimeoutError(\"HTTPConnectionPool(host='api.waditu.com', port=80): Read timed out. (read timeout=30)\"))"
-      },
-      {
-        "ts_code": "000530.SZ",
-        "error": "ReadTimeout(ReadTimeoutError(\"HTTPConnectionPool(host='api.waditu.com', port=80): Read timed out. (read timeout=30)\"))"
-      },
-      {
-        "ts_code": "000576.SZ",
-        "error": "ReadTimeout(ReadTimeoutError(\"HTTPConnectionPool(host='api.waditu.com', port=80): Read timed out. (read timeout=30)\"))"
-      },
-      {
-        "ts_code": "000607.SZ",
-        "error": "ReadTimeout(ReadTimeoutError(\"HTTPConnectionPool(host='api.waditu.com', port=80): Read timed out. (read timeout=30)\"))"
-      },
-      {
-        "ts_code": "000701.SZ",
-        "error": "ReadTimeout(ReadTimeoutError(\"HTTPConnectionPool(host='api.waditu.com', port=80): Read timed out. (read timeout=30)\"))"
-      },
-      {
-        "ts_code": "000887.SZ",
-        "error": "ReadTimeout(ReadTimeoutError(\"HTTPConnectionPool(host='api.waditu.com', port=80): Read timed out. (read timeout=30)\"))"
-      },
-      {
-        "ts_code": "001319.SZ",
-        "error": "ReadTimeout(ReadTimeoutError(\"HTTPConnectionPool(host='api.waditu.com', port=80): Read timed out. (read timeout=30)\"))"
-      },
-      {
-        "ts_code": "001358.SZ",
-        "error": "ReadTimeout(ReadTimeoutError(\"HTTPConnectionPool(host='api.waditu.com', port=80): Read timed out. (read timeout=30)\"))"
-      },
-      {
-        "ts_code": "001696.SZ",
-        "error": "ReadTimeout(ReadTimeoutError(\"HTTPConnectionPool(host='api.waditu.com', port=80): Read timed out. (read timeout=30)\"))"
-      },
-      {
-        "ts_code": "002076.SZ",
-        "error": "ReadTimeout(ReadTimeoutError(\"HTTPConnectionPool(host='api.waditu.com', port=80): Read timed out. (read timeout=30)\"))"
-      },
-      {
-        "ts_code": "002085.SZ",
-        "error": "ReadTimeout(ReadTimeoutError(\"HTTPConnectionPool(host='api.waditu.com', port=80): Read timed out. (read timeout=30)\"))"
-      },
-      {
-        "ts_code": "002510.SZ",
-        "error": "ReadTimeout(ReadTimeoutError(\"HTTPConnectionPool(host='api.waditu.com', port=80): Read timed out. (read timeout=30)\"))"
-      },
-      {
-        "ts_code": "002531.SZ",
-        "error": "ReadTimeout(ReadTimeoutError(\"HTTPConnectionPool(host='api.waditu.com', port=80): Read timed out. (read timeout=30)\"))"
-      },
-      {
-        "ts_code": "002535.SZ",
-        "error": "ReadTimeout(ReadTimeoutError(\"HTTPConnectionPool(host='api.waditu.com', port=80): Read timed out. (read timeout=30)\"))"
-      },
-      {
-        "ts_code": "002683.SZ",
-        "error": "ReadTimeout(ReadTimeoutError(\"HTTPConnectionPool(host='api.waditu.com', port=80): Read timed out. (read timeout=30)\"))"
-      },
-      {
-        "ts_code": "002724.SZ",
-        "error": "ReadTimeout(ReadTimeoutError(\"HTTPConnectionPool(host='api.waditu.com', port=80): Read timed out. (read timeout=30)\"))"
-      },
-      {
-        "ts_code": "002767.SZ",
-        "error": "ReadTimeout(ReadTimeoutError(\"HTTPConnectionPool(host='api.waditu.com', port=80): Read timed out. (read timeout=30)\"))"
-      },
-      {
-        "ts_code": "002869.SZ",
-        "error": "ReadTimeout(ReadTimeoutError(\"HTTPConnectionPool(host='api.waditu.com', port=80): Read timed out. (read timeout=30)\"))"
-      },
-      {
-        "ts_code": "002889.SZ",
-        "error": "ReadTimeout(ReadTimeoutError(\"HTTPConnectionPool(host='api.waditu.com', port=80): Read timed out. (read timeout=30)\"))"
-      },
-      {
-        "ts_code": "002917.SZ",
-        "error": "ReadTimeout(ReadTimeoutError(\"HTTPConnectionPool(host='api.waditu.com', port=80): Read timed out. (read timeout=30)\"))"
-      },
-      {
-        "ts_code": "002949.SZ",
-        "error": "ReadTimeout(ReadTimeoutError(\"HTTPConnectionPool(host='api.waditu.com', port=80): Read timed out. (read timeout=30)\"))"
-      },
-      {
-        "ts_code": "003029.SZ",
-        "error": "ReadTimeout(ReadTimeoutError(\"HTTPConnectionPool(host='api.waditu.com', port=80): Read timed out. (read timeout=30)\"))"
-      },
-      {
-        "ts_code": "300045.SZ",
-        "error": "ReadTimeout(ReadTimeoutError(\"HTTPConnectionPool(host='api.waditu.com', port=80): Read timed out. (read timeout=30)\"))"
-      }
-    ],
+    "symbols_success": 106,
+    "symbols_failed": 0,
+    "errors": [],
     "fallback_symbol_query_count": 106,
-    "required_symbols_success": 30,
-    "required_symbols_failed": 33,
-    "required_failed_codes": [
-      "000099.SZ",
-      "000420.SZ",
-      "000530.SZ",
-      "000573.SZ",
-      "000576.SZ",
-      "000607.SZ",
-      "000678.SZ",
-      "000701.SZ",
-      "000887.SZ",
-      "001319.SZ",
-      "001358.SZ",
-      "001696.SZ",
-      "002076.SZ",
-      "002085.SZ",
-      "002510.SZ",
-      "002531.SZ",
-      "002535.SZ",
-      "002683.SZ",
-      "002724.SZ",
-      "002767.SZ",
-      "002869.SZ",
-      "002889.SZ",
-      "002917.SZ",
-      "002933.SZ",
-      "002949.SZ",
-      "003029.SZ",
-      "300045.SZ",
-      "300581.SZ",
-      "300681.SZ",
-      "600148.SH"
-    ],
-    "required_coverage_ratio": 0.47619047619047616,
-    "coverage_status": "partial"
+    "required_symbols_success": 63,
+    "required_symbols_failed": 0,
+    "required_failed_codes": [],
+    "required_coverage_ratio": 1.0,
+    "coverage_status": "complete"
   },
   "intraday_features": {
     "ok": true,
@@ -387,7 +263,7 @@
   },
   "realtime_snapshot": {
     "ok": true,
-    "rows": 73,
+    "rows": 106,
     "columns": [
       "ts_code",
       "trade_date",
