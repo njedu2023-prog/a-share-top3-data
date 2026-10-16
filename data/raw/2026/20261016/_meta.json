@@ -1,0 +1,284 @@
+{
+  "requested_trade_date": "20261016",
+  "resolved_trade_date": "20261016",
+  "generated_at_bj": "2026-10-16 19:55:29",
+  "jobs": [
+    {
+      "key": "limit_list_d",
+      "note": "涨停池（日）（优先拉取 Tushare limit_times/up_stat；后处理中仍强制保留收盘真实涨停池口径）",
+      "allow_empty": true,
+      "required": false,
+      "kwargs": {
+        "trade_date": "20261016",
+        "fields": "trade_date,ts_code,name,limit_type,close,up_limit,down_limit,open_times,fd_amount,first_time,last_time,limit_times,up_stat,industry,turnover_ratio,amount,float_mv,total_mv"
+      },
+      "status": "ok",
+      "rows": 120,
+      "error": null
+    },
+    {
+      "key": "limit_break_d",
+      "note": "炸板/开板（日）（可选；默认关闭不稳定接口并写出空表头）",
+      "allow_empty": true,
+      "required": false,
+      "kwargs": {
+        "trade_date": "20261016",
+        "fields": "trade_date,ts_code,name,open_times,first_time,last_time,fd_amount"
+      },
+      "status": "ok_empty",
+      "rows": 0,
+      "error": null
+    },
+    {
+      "key": "daily",
+      "note": "日线行情（OHLCV+amount）",
+      "allow_empty": false,
+      "required": true,
+      "kwargs": {
+        "trade_date": "20261016",
+        "fields": "ts_code,trade_date,open,high,low,close,pre_close,vol,amount,pct_chg"
+      },
+      "status": "ok",
+      "rows": 5567,
+      "error": null
+    },
+    {
+      "key": "stk_limit",
+      "note": "涨跌停价（限制价格）",
+      "allow_empty": false,
+      "required": true,
+      "kwargs": {
+        "trade_date": "20261016",
+        "fields": "ts_code,trade_date,up_limit,down_limit"
+      },
+      "status": "ok",
+      "rows": 5655,
+      "error": null
+    },
+    {
+      "key": "daily_basic",
+      "note": "每日指标（换手/市值/量比）",
+      "allow_empty": false,
+      "required": true,
+      "kwargs": {
+        "trade_date": "20261016",
+        "fields": "ts_code,trade_date,turnover_rate,turnover_rate_f,volume_ratio,total_mv,float_mv"
+      },
+      "status": "ok",
+      "rows": 5567,
+      "error": null
+    },
+    {
+      "key": "stock_basic",
+      "note": "股票基础信息（name/industry/list_date等）",
+      "allow_empty": true,
+      "required": false,
+      "kwargs": {
+        "exchange": "",
+        "list_status": "L",
+        "fields": "ts_code,symbol,name,area,industry,market,list_date"
+      },
+      "status": "ok",
+      "rows": 5577,
+      "error": null
+    },
+    {
+      "key": "namechange",
+      "note": "名称变更（用于ST/更名等过滤）",
+      "allow_empty": true,
+      "required": false,
+      "kwargs": {
+        "start_date": "20260916",
+        "end_date": "20261016",
+        "fields": "ts_code,name,start_date,end_date,change_reason"
+      },
+      "status": "ok",
+      "rows": 27,
+      "error": null
+    },
+    {
+      "key": "top_list",
+      "note": "龙虎榜",
+      "allow_empty": true,
+      "required": false,
+      "kwargs": {
+        "trade_date": "20261016"
+      },
+      "status": "ok",
+      "rows": 61,
+      "error": null
+    },
+    {
+      "key": "moneyflow_hsgt",
+      "note": "沪深港通资金流向",
+      "allow_empty": true,
+      "required": false,
+      "kwargs": {
+        "trade_date": "20261016"
+      },
+      "status": "ok",
+      "rows": 1,
+      "error": null
+    }
+  ],
+  "derived": {
+    "limit_fields": {
+      "limit_list_d": {
+        "has_open_times": 1,
+        "has_fd_amount": 1,
+        "has_seal_amount": 1,
+        "has_limit_type": 0,
+        "has_up_limit": 0,
+        "has_down_limit": 0,
+        "has_limit_times": 1,
+        "has_up_stat": 1
+      },
+      "limit_break_d": {
+        "has_open_times": 1,
+        "has_fd_amount": 0,
+        "has_seal_amount": 1,
+        "has_limit_type": 0,
+        "has_up_limit": 0,
+        "has_down_limit": 0,
+        "has_limit_times": 0,
+        "has_up_stat": 0
+      }
+    },
+    "limit_list_d_policy": {
+      "policy": "CLOSE_EQ_UP_LIMIT",
+      "trade_date": "20261016",
+      "input_rows": 120,
+      "output_rows": 63,
+      "used_daily_close": 0,
+      "used_stk_limit": 1,
+      "filled_up_limit": 120,
+      "filled_down_limit": 120,
+      "warn": ""
+    },
+    "limit_stage": {
+      "source": "limit_list_d.limit_times",
+      "limit_list_rows": 63,
+      "limit_step_rows": 7,
+      "rows": 63,
+      "limit_times_nonnull": 61,
+      "missing_reason": ""
+    },
+    "hot_board_tags": {
+      "hot_board_topn": 10,
+      "hot_boards": 10,
+      "tagged": 63
+    }
+  },
+  "limit_step": {
+    "ok": true,
+    "api_name": "limit_step",
+    "rows": 7,
+    "columns": [
+      "trade_date",
+      "ts_code",
+      "name"
+    ],
+    "error": ""
+  },
+  "auction": {
+    "enabled": true,
+    "ok": true,
+    "rows": 6095,
+    "columns": [
+      "ts_code",
+      "trade_date",
+      "vol",
+      "price",
+      "amount"
+    ],
+    "error": "",
+    "feature_rows": 6095
+  },
+  "minute": {
+    "enabled": true,
+    "realtime_only": true,
+    "market_minute_scan": false,
+    "realtime_quote": {
+      "ok": false,
+      "rows": 0,
+      "error": "disabled"
+    },
+    "ok": true,
+    "freq": "1min",
+    "wp_pre_candidates": 43,
+    "selection": {
+      "policy": "preserve_legacy_selection_plus_required_limit_list",
+      "configured_cap": 80,
+      "legacy_selected_count": 80,
+      "required_count": 63,
+      "required_selected": 63,
+      "required_already_in_legacy": 37,
+      "required_added_beyond_cap": 26,
+      "preserved_nonrequired_count": 43,
+      "selected_count": 106
+    },
+    "minute_end": "2026-10-16 15:00:00",
+    "symbols_requested": 106,
+    "symbols_success": 106,
+    "symbols_failed": 0,
+    "errors": [],
+    "fallback_symbol_query_count": 106,
+    "required_symbols_success": 63,
+    "required_symbols_failed": 0,
+    "required_failed_codes": [],
+    "required_coverage_ratio": 1.0,
+    "coverage_status": "complete"
+  },
+  "intraday_features": {
+    "ok": true,
+    "rows": 106,
+    "columns": [
+      "ts_code",
+      "trade_date",
+      "minute_freq",
+      "minute_rows",
+      "has_minute_data",
+      "first_limit_time",
+      "last_limit_time",
+      "limit_touch_count",
+      "open_board_count",
+      "max_drawdown_after_limit",
+      "reseal_count",
+      "reseal_minutes_avg",
+      "reseal_speed_score",
+      "reseal_acceptance_score",
+      "intraday_vwap",
+      "intraday_vwap_position",
+      "late_volume_ratio",
+      "late_price_change_pct",
+      "late_price_weakness",
+      "late_limit_hold_minutes",
+      "late_withdraw_score",
+      "limitup_path_score",
+      "limitup_quality_score",
+      "intraday_risk_score",
+      "intraday_tag"
+    ],
+    "error": ""
+  },
+  "realtime_snapshot": {
+    "ok": true,
+    "rows": 106,
+    "columns": [
+      "ts_code",
+      "trade_date",
+      "update_time",
+      "price",
+      "open",
+      "high",
+      "low",
+      "close",
+      "pre_close",
+      "pct_chg",
+      "vol",
+      "amount",
+      "realtime_source"
+    ],
+    "error": ""
+  }
+}
