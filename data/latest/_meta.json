@@ -1,7 +1,7 @@
 {
-  "requested_trade_date": null,
-  "resolved_trade_date": "20261020",
-  "generated_at_bj": "2026-10-20 22:39:10",
+  "requested_trade_date": "20261021",
+  "resolved_trade_date": "20261021",
+  "generated_at_bj": "2026-10-21 19:12:03",
   "jobs": [
     {
       "key": "limit_list_d",
@@ -9,11 +9,11 @@
       "allow_empty": true,
       "required": false,
       "kwargs": {
-        "trade_date": "20261020",
+        "trade_date": "20261021",
         "fields": "trade_date,ts_code,name,limit_type,close,up_limit,down_limit,open_times,fd_amount,first_time,last_time,limit_times,up_stat,industry,turnover_ratio,amount,float_mv,total_mv"
       },
       "status": "ok",
-      "rows": 89,
+      "rows": 74,
       "error": null
     },
     {
@@ -22,7 +22,7 @@
       "allow_empty": true,
       "required": false,
       "kwargs": {
-        "trade_date": "20261020",
+        "trade_date": "20261021",
         "fields": "trade_date,ts_code,name,open_times,first_time,last_time,fd_amount"
       },
       "status": "ok_empty",
@@ -35,7 +35,7 @@
       "allow_empty": false,
       "required": true,
       "kwargs": {
-        "trade_date": "20261020",
+        "trade_date": "20261021",
         "fields": "ts_code,trade_date,open,high,low,close,pre_close,vol,amount,pct_chg"
       },
       "status": "ok",
@@ -48,11 +48,11 @@
       "allow_empty": false,
       "required": true,
       "kwargs": {
-        "trade_date": "20261020",
+        "trade_date": "20261021",
         "fields": "ts_code,trade_date,up_limit,down_limit"
       },
       "status": "ok",
-      "rows": 5653,
+      "rows": 5654,
       "error": null
     },
     {
@@ -61,7 +61,7 @@
       "allow_empty": false,
       "required": true,
       "kwargs": {
-        "trade_date": "20261020",
+        "trade_date": "20261021",
         "fields": "ts_code,trade_date,turnover_rate,turnover_rate_f,volume_ratio,total_mv,float_mv"
       },
       "status": "ok",
@@ -79,7 +79,7 @@
         "fields": "ts_code,symbol,name,area,industry,market,list_date"
       },
       "status": "ok",
-      "rows": 5575,
+      "rows": 5576,
       "error": null
     },
     {
@@ -88,12 +88,12 @@
       "allow_empty": true,
       "required": false,
       "kwargs": {
-        "start_date": "20260920",
-        "end_date": "20261020",
+        "start_date": "20260921",
+        "end_date": "20261021",
         "fields": "ts_code,name,start_date,end_date,change_reason"
       },
       "status": "ok",
-      "rows": 27,
+      "rows": 29,
       "error": null
     },
     {
@@ -102,10 +102,10 @@
       "allow_empty": true,
       "required": false,
       "kwargs": {
-        "trade_date": "20261020"
+        "trade_date": "20261021"
       },
       "status": "ok",
-      "rows": 82,
+      "rows": 69,
       "error": null
     },
     {
@@ -114,7 +114,7 @@
       "allow_empty": true,
       "required": false,
       "kwargs": {
-        "trade_date": "20261020"
+        "trade_date": "20261021"
       },
       "status": "ok",
       "rows": 1,
@@ -146,33 +146,33 @@
     },
     "limit_list_d_policy": {
       "policy": "CLOSE_EQ_UP_LIMIT",
-      "trade_date": "20261020",
-      "input_rows": 89,
-      "output_rows": 54,
+      "trade_date": "20261021",
+      "input_rows": 74,
+      "output_rows": 50,
       "used_daily_close": 0,
       "used_stk_limit": 1,
-      "filled_up_limit": 89,
-      "filled_down_limit": 89,
+      "filled_up_limit": 74,
+      "filled_down_limit": 74,
       "warn": ""
     },
     "limit_stage": {
       "source": "limit_list_d.limit_times",
-      "limit_list_rows": 54,
-      "limit_step_rows": 14,
-      "rows": 54,
-      "limit_times_nonnull": 54,
+      "limit_list_rows": 50,
+      "limit_step_rows": 16,
+      "rows": 50,
+      "limit_times_nonnull": 50,
       "missing_reason": ""
     },
     "hot_board_tags": {
       "hot_board_topn": 10,
       "hot_boards": 10,
-      "tagged": 54
+      "tagged": 50
     }
   },
   "limit_step": {
     "ok": true,
     "api_name": "limit_step",
-    "rows": 14,
+    "rows": 16,
     "columns": [
       "trade_date",
       "ts_code",
@@ -205,25 +205,25 @@
     },
     "ok": true,
     "freq": "1min",
-    "wp_pre_candidates": 85,
+    "wp_pre_candidates": 24,
     "selection": {
       "policy": "preserve_legacy_selection_plus_required_limit_list",
       "configured_cap": 80,
       "legacy_selected_count": 80,
-      "required_count": 54,
-      "required_selected": 54,
-      "required_already_in_legacy": 0,
-      "required_added_beyond_cap": 54,
-      "preserved_nonrequired_count": 80,
-      "selected_count": 134
+      "required_count": 50,
+      "required_selected": 50,
+      "required_already_in_legacy": 50,
+      "required_added_beyond_cap": 0,
+      "preserved_nonrequired_count": 30,
+      "selected_count": 80
     },
-    "minute_end": "2026-10-20 15:00:00",
-    "symbols_requested": 134,
-    "symbols_success": 134,
+    "minute_end": "2026-10-21 15:00:00",
+    "symbols_requested": 80,
+    "symbols_success": 80,
     "symbols_failed": 0,
     "errors": [],
-    "fallback_symbol_query_count": 134,
-    "required_symbols_success": 54,
+    "fallback_symbol_query_count": 80,
+    "required_symbols_success": 50,
     "required_symbols_failed": 0,
     "required_failed_codes": [],
     "required_coverage_ratio": 1.0,
@@ -231,7 +231,7 @@
   },
   "intraday_features": {
     "ok": true,
-    "rows": 134,
+    "rows": 80,
     "columns": [
       "ts_code",
       "trade_date",
@@ -263,7 +263,7 @@
   },
   "realtime_snapshot": {
     "ok": true,
-    "rows": 134,
+    "rows": 80,
     "columns": [
       "ts_code",
       "trade_date",
